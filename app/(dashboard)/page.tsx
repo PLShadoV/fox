@@ -18,7 +18,9 @@ export default async function DashboardPage() {
         <Tile title="Zysk dziś" value={<span id="profit">—</span>} icon={<PiggyBank size={18} />} hint="PLN" />
       </section>
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card title="Ceny Day‑Ahead" subtitle="ENTSO‑E → PLN/MWh">
+       <Card title="Ceny Day-Ahead">
+  <p className="text-sm text-gray-500">ENTSO-E → PLN/MWh</p>
+
           <ClientChart />
         </Card>
         <Card title="Moc teraz">
