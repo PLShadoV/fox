@@ -1,0 +1,65 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+
+model InverterReading {
+  id           String   @id @default(cuid())
+  ts           DateTime @index
+  pvPowerW     Int
+  gridExportW  Int
+  gridImportW  Int
+  batterySOC   Int?
+}
+
+model MeterReading {
+  id        String   @id @default(cuid())
+  ts        DateTime @index
+  phaseA_W  Int?
+  phaseB_W  Int?
+  phaseC_W  Int?
+  importWh  Int?
+  exportWh  Int?
+  deviceId  String?
+}
+
+model PriceHour {
+  id             String   @id @default(cuid())
+  ts             DateTime @unique
+  pricePLNMWh    Float
+  source         String
+}
+
+model PriceMonth {
+  id             String   @id @default(cuid())
+  yyyymm         String   @unique
+  rcemPLNMWh     Float
+}
+
+model ProfitHour {
+  id             String   @id @default(cuid())
+  ts             DateTime @unique
+  exportWh       Int
+  importWh       Int
+  pricePLNMWh    Float
+  revenuePLN     Float
+  costPLN        Float
+  netPLN         Float
+}
+
+model Rule {
+  id        String   @id @default(cuid())
+  type      String
+  condition Json
+  action    Json
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model DeviceAction {
+  id        String   @id @default(cuid())
+  ts        DateTime @default(now())
+  deviceId  String
+  ruleId    String?
+  action    String
+  value     String?
+  reason    String?
+}

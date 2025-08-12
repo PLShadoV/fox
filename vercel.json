@@ -1,0 +1,6 @@
+{
+  "functions": { "app/api/**/route.ts": { "runtime": "edge" } },
+  "cron": [
+    { "path": "/api/cron/run", "schedule": "0 * * * *" }
+  ]
+}
