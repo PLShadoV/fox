@@ -1,27 +1,36 @@
-export type TuyaCommand = { deviceId: string; code: string; value: any };
+// src/lib/tuya.ts
 
-function notConfigured() {
-  return !(process.env.TUYA_CLIENT_ID && process.env.TUYA_CLIENT_SECRET);
-}
+export type TuyaCommand = {
+  deviceId: string;
+  code: string;
+  value: any;
+};
 
+// Zwraca no-op, żeby backend przechodził build nawet bez TUYA_* w ENV
 export async function sendTuyaCommand(cmd: TuyaCommand) {
-  if (notConfigured()) {
-    return { ok: false, error: "Tuya not configured: set TUYA_CLIENT_ID and TUYA_CLIENT_SECRET in ENV", received: cmd };
+  const configured = !!(process.env.TUYA_CLIENT_ID && process.env.TUYA_CLIENT_SECRET);
+  if (!configured) {
+    return { ok: false, status: 501, message: "Tuya not configured" };
   }
-  return { ok: true, simulated: true, sent: cmd };
+  // TODO: tutaj docelowo wywołanie Tuya Cloud API
+  return { ok: true };
 }
 
-export async function getTuyaMeterReading(deviceId?: string) {
-  if (notConfigured()) {
-    return { ok: false, error: "Tuya not configured", deviceId };
+// Prosty status urządzenia (stub)
+export async function tuyaDeviceStatus(deviceId: string) {
+  const configured = !!(process.env.TUYA_CLIENT_ID && process.env.TUYA_CLIENT_SECRET);
+  if (!configured) {
+    return { ok: false, status: 501, message: "Tuya not configured" };
   }
-  // Placeholder reading
-  return { ok: true, deviceId, ts: new Date().toISOString(), importW: 0, exportW: 0 };
+  return { ok: true, result: [] };
 }
 
-export async function tuyaDeviceStatus(deviceId?: string) {
-  if (notConfigured()) {
-    return { ok: false, error: "Tuya not configured", deviceId };
+// Prosty odczyt licznika (stub)
+export async function getTuyaMeterReading(deviceId: string) {
+  const configured = !!(process.env.TUYA_CLIENT_ID && process.env.TUYA_CLIENT_SECRET);
+  if (!configured) {
+    return { ok: false, status: 501, message: "Tuya not configured", watts: 0, importWh: 0, exportWh: 0 };
   }
-  return { ok: true, deviceId, online: true };
+  // TODO: mapowanie z DP -> wartości
+  return { ok: true, watts: 0, importWh: 0, exportWh: 0 };
 }
