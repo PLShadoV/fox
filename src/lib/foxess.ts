@@ -75,3 +75,36 @@ export async function getFoxRealtime(): Promise<Realtime> {
 
   return { pvPowerW, gridExportW, gridImportW, batterySOC, raw: data };
 }
+
+
+async function foxFetch(path: string, method: "GET" | "POST", body?: any) {
+  if (!TOKEN) throw new Error("Brak FOXESS_API_KEY w ENV");
+  const timestamp = Date.now().toString();
+  const variants = [
+    (p:string,tok:string,ts:string)=>crypto.createHash("md5").update(`${p}\r\n${tok}\r\n${ts}`).digest("hex"),
+    (p:string,tok:string,ts:string)=>crypto.createHash("md5").update(`${p}\n${tok}\n${ts}`).digest("hex"),
+    (p:string,tok:string,ts:string)=>crypto.createHash("md5").update(`${p}${tok}${ts}`).digest("hex")
+  ];
+  let lastResp: any = null;
+  for (let i=0;i<variants.length;i++) {
+    const signature = variants[i](path, TOKEN, timestamp);
+    const headers: Record<string, string> = {
+      "token": TOKEN,
+      "timestamp": timestamp,
+      "signature": signature,
+      "lang": "en",
+      "Content-Type": "application/json",
+      "User-Agent": "NetBilling-Dashboard/1.0"
+    };
+    const res = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: "no-store" });
+    let data: any = null;
+    try { data = await res.json(); } catch { data = await res.text(); }
+    lastResp = data;
+    // If signature illegal (40256) try next variant
+    if (typeof data === 'object' && data?.errno === 40256) continue;
+    if (!res.ok) throw new Error(`FoxESS HTTP ${res.status}: ${JSON.stringify(data)}`);
+    return data;
+  }
+  // All failed – return last response so user can see the error
+  return lastResp;
+}

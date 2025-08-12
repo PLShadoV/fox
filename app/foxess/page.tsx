@@ -28,7 +28,7 @@ export default function FoxessPage() {
       } />
       <div className="container grid gap-4">
         <Card title="Realtime" subtitle="PV / Import / Eksport">
-          {error && <div className="text-red-400 mb-3">{error}</div>}
+          {error && <div className="mb-3 px-3 py-2 rounded-xl border border-red-500/40 bg-red-500/10 text-red-200 text-sm">{error}</div>}
           {loading && <div className="muted">Ładowanie…</div>}
           <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(data, null, 2)}</pre>
         </Card>

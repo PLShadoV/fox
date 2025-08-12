@@ -41,6 +41,7 @@ async function getToken(): Promise<string> {
   const now = Date.now();
   if (cachedToken && cachedToken.exp > now + 60_000) return cachedToken.token;
   // grant_type=1 – simple client credentials
+  if (!ID || !SECRET) { throw new Error('Brak TUYA_CLIENT_ID / TUYA_CLIENT_SECRET w ENV'); }
   const path = "/v1.0/token?grant_type=1";
   const t = Date.now().toString();
   const stringToSign = ["GET", crypto.createHash("sha256").update("").digest("hex"), "", path].join("\n");

@@ -37,7 +37,7 @@ export default function TuyaPage() {
             <button onClick={readStatus} className="btn"><RefreshCw size={16}/> Status</button>
             <button onClick={()=>sendCommand(true)} className="btn btn-primary"><Power size={16}/> Włącz</button>
           </div>
-          <div className="text-xs muted mt-2">{log}</div>
+          <div className="text-xs muted mt-2">{log || 'Podaj deviceId i kliknij Status. Jeśli widzisz błąd tokena – ustaw TUYA_CLIENT_ID i TUYA_CLIENT_SECRET w Vercel → Environment Variables oraz połącz Tuya App Account w Tuya Cloud.'}</div>
         </Card>
         <Card title="Status DP">
           <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(status, null, 2)}</pre>
