@@ -6,7 +6,7 @@ export default function Card({
 }: {
   title?: string;
   subtitle?: string;
-  right?: React.ReactNode;   // ⬅️ nowy slot na akcje po prawej
+  right?: React.ReactNode;   // slot na akcje po prawej
   children: React.ReactNode;
 }) {
   return (
