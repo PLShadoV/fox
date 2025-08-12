@@ -1,41 +1,38 @@
 'use client';
-import { useEffect, useState } from "react";
-import Card from "@/components/Card";
-import { getBaseUrl } from "@/lib/base-url";
+
+import { useState } from 'react';
+import Card from '@/components/Card';
+import { getBaseUrl } from '@/lib/base-url';
 
 export default function FoxessPage() {
-  const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<any>(null);
+  const base = getBaseUrl(); // on client ''
 
   async function ping() {
     setLoading(true);
-    setError(null);
     try {
-      const res = await fetch(`${getBaseUrl()}/api/foxess/ping`, { cache: "no-store" });
+      const res = await fetch(`${base}/api/foxess/ping`, { cache: 'no-store' });
       const json = await res.json();
       setData(json);
-    } catch (e: any) {
-      setError(e?.message || "Błąd");
+    } catch (e:any) {
+      setData({ error: e?.message || 'fetch error' });
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { ping(); }, []);
-
   return (
-    <main className="grid gap-4">
-      <Card title="FoxESS">
-        <div className="muted text-sm mb-2">Test połączenia z API</div>
-        <button className="btn btn-primary" onClick={ping} disabled={loading}>
-          {loading ? "Ładuję..." : "Połącz / Odśwież"}
+    <div className="grid gap-4">
+      <Card title="FoxESS" subtitle="Szybki ping API" right={
+        <button onClick={ping} disabled={loading} className="rounded-xl bg-white/20 px-3 py-1.5 text-sm hover:bg-white/30 disabled:opacity-50">
+          {loading ? 'Ładowanie…' : 'Odśwież'}
         </button>
-        <pre className="mt-3 overflow-auto rounded-xl bg-black/30 p-3 text-xs">
-{JSON.stringify(data ?? { status: "no data" }, null, 2)}
+      }>
+        <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-white/80">
+          {data ? JSON.stringify(data, null, 2) : 'Kliknij „Odśwież”, aby wykonać ping.'}
         </pre>
-        {error ? <div className="text-red-300 mt-2">{error}</div> : null}
       </Card>
-    </main>
+    </div>
   );
 }

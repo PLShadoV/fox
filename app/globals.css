@@ -2,14 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { --bg: #0e1117; }
-
-body { @apply bg-[var(--bg)] text-white antialiased; }
-
-.card-glass {
-  @apply rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md shadow-[inset_0_1px_0_rgba(255,255,255,.08),0_12px_30px_rgba(0,0,0,.35)];
-}
-
-.btn { @apply inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm hover:bg-white/15; }
-.btn-primary { @apply bg-white/20 hover:bg-white/25; }
-.muted { @apply text-white/60; }
+:root { color-scheme: dark; }
+.muted { color: rgba(255,255,255,.65); }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }

@@ -1,13 +1,12 @@
-import { NextResponse } from "next/server";
-export const dynamic = 'force-dynamic';
+import { NextResponse } from 'next/server';
+
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const payload = {
+  return NextResponse.json({
     ok: true,
-    errno: null,
     sample: { pvPowerW: 0, gridExportW: 0, gridImportW: 0 },
-    raw: { result: [] }
-  };
-  return NextResponse.json(payload, { status: 200 });
+    raw: { msg: 'stub ok' }
+  });
 }
