@@ -1,14 +1,17 @@
-import axios from "axios";
-
+/**
+ * FoxESS Cloud klient – szkielet.
+ * Wymaga skonfigurowania poprawnych endpointów i klucza API w ENV.
+ * Jeśli brak kluczy, zwraca mock, aby UI działał.
+ */
 type Realtime = { pvPowerW: number; gridExportW: number; gridImportW: number; batterySOC?: number; };
 
 export async function getFoxRealtime(): Promise<Realtime> {
-  // Placeholder – implement with FoxESS Cloud API
-  // Uses FOXESS_API_BASE and FOXESS_API_KEY
-  if (!process.env.FOXESS_API_KEY) {
-    // Return mock to let the UI render
+  const key = process.env.FOXESS_API_KEY;
+  if (!key) {
+    // Mock
     return { pvPowerW: 3200, gridExportW: 500, gridImportW: 150 };
   }
-  // TODO: real call. Keep edge runtime in mind (fetch instead of axios)
+  // TODO: Zaimplementuj wywołanie FoxESS Cloud wg Twoich danych (token, ścieżki API).
+  // Na przykład: fetch(`${process.env.FOXESS_API_BASE}/...`, { headers: { Authorization: `Bearer ${key}` } })
   return { pvPowerW: 0, gridExportW: 0, gridImportW: 0 };
 }
