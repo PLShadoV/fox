@@ -4,6 +4,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@lib/*": [
+        "src/lib/*"
       ]
     },
     "jsx": "preserve",
