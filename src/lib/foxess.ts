@@ -19,10 +19,10 @@ export async function getFoxRealtime(): Promise<Realtime> {
   if (!TOKEN) {
     return { pvPowerW: 3200, gridExportW: 500, gridImportW: 150 };
   }
-  const path = "/op/v0/device/real/query";
+  const path = "/op/v0/device/real/query"; const fallbackPath = "/op/v1/device/real/query";
   if (!SN) throw new Error("FOXESS_DEVICE_SN nie ustawione");
   const payload = { sn: SN, variables: [] as string[] };
-  const data = await foxFetch(path, "POST", payload);
+  let data:any = await foxFetch(path, "POST", payload); if (data?.errno === 40256) { data = await foxFetch(fallbackPath, "POST", payload); }
   const result = (data as any)?.result || {};
   const arr: Array<{ variable: string; value: number }> = Array.isArray(result) ? result : (result.datas || result.data || []);
   let pvPowerW = 0, gridExportW = 0, gridImportW = 0, batterySOC: number | undefined = undefined;
@@ -78,7 +78,7 @@ async function foxFetch(path: string, method: "GET" | "POST", body?: any) {
             "timestamp": t,
             "signature": sig,
             "lang": "en",
-            "Accept": "application/json",
+            "Accept": "application/json", "Origin":"https://www.foxesscloud.com", "Referer":"https://www.foxesscloud.com/",
             "Content-Type": "application/json",
           };
           const res = await fetch(BASE + p, { method, headers, body: bodyStr || undefined, cache: "no-store" });

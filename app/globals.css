@@ -1,3 +1,4 @@
+
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
 
 @tailwind base;
@@ -5,12 +6,20 @@
 @tailwind utilities;
 
 :root {
-  --bg: 222 47% 6%;
-  --bg-grad-1: #0B1220;
-  --bg-grad-2: #0A0F1C;
-  --card: 222 47% 11%;
-  --card-2: 222 47% 13%;
-  --muted: 215 20% 65%;
+  --bg: #0B0F19;
+  --bg2: #0A0E16;
+  --fg: #E5E7EB;
+  --muted: #9AA4B2;
+  --card: #111827cc;
+  --border: rgba(255,255,255,0.08);
+}
+[data-theme="light"] {
+  --bg: #F7FAFF;
+  --bg2: #F2F6FC;
+  --fg: #0B1220;
+  --muted: #5B6575;
+  --card: #ffffffd9;
+  --border: rgba(0,0,0,0.08);
 }
 
 * { box-sizing: border-box; }
@@ -19,23 +28,28 @@ body {
   background:
     radial-gradient(900px 500px at 80% -10%, rgba(56,189,248,0.12), transparent 60%),
     radial-gradient(700px 400px at 0% 0%, rgba(99,102,241,0.14), transparent 50%),
-    linear-gradient(180deg, #0B0F19 0%, #0A0E16 100%);
-  color: hsl(214 32% 91%);
-  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    linear-gradient(180deg, var(--bg), var(--bg2));
+  color: var(--fg);
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
 }
+.container { @apply max-w-7xl mx-auto px-4 md:px-6; }
 
 .card {
   @apply rounded-2xl p-5;
-  background: linear-gradient(180deg, hsla(var(--card)/0.9), hsla(var(--card)/0.8));
-  border: 1px solid rgba(255,255,255,0.06);
-  box-shadow: 0 10px 30px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04);
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04);
   backdrop-filter: blur(10px);
 }
-
+.tile {
+  @apply rounded-2xl p-5;
+  background: var(--card);
+  border: 1px solid var(--border);
+}
 .btn {
   @apply inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition;
   background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.05));
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid var(--border);
 }
 .btn:hover { transform: translateY(-1px); }
 .btn-primary {
@@ -44,9 +58,7 @@ body {
 }
 .input {
   @apply px-3 py-2 rounded-xl text-sm bg-transparent outline-none w-full;
-  border: 1px solid rgba(255,255,255,0.12);
+  border: 1px solid var(--border);
 }
-.kbd { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-.muted { color: hsl(var(--muted)); }
-.hr { height:1px; background: rgba(255,255,255,0.08); }
-.container { @apply max-w-7xl mx-auto p-4 md:p-6; }
+.muted { color: var(--muted); }
+.hr { height:1px; background: var(--border); }

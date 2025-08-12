@@ -47,7 +47,7 @@ export default function TuyaPage() {
             <li>Połącz konto Smart Life w Tuya Cloud (Link App Account).</li>
             <li>Sprawdź listę urządzeń w projekcie – tam znajdziesz deviceId licznika.</li>
             <li>Wpisz deviceId powyżej i odczytaj status.</li>
-          </ul>
+          <li>Jeśli widzisz błąd <b>No permissions / subscription expired</b> – w Tuya Cloud wybierz zakładkę <b>Cloud</b> → <b>Subscribe</b> i aktywuj <i>Cloud Development</i> (bezpłatny plan próbny) oraz przyznaj uprawnienia <i>Device Status</i> i <i>Device Control</i>.</li></ul>
         </Card>
       </div>
     </main>
