@@ -1,50 +1,32 @@
-// Strona główna dashboardu: dynamiczny runtime, bez prerenderingu
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
-export const runtime = 'nodejs';
+'use client';
 
-import dynamic from 'next/dynamic';
+import React from 'react';
 import Card from '@/components/ui/Card';
+import ClientChart from './price-chart';
 
-const ClientChart = dynamic(() => import('./price-chart'), { ssr: false });
-
-export default async function DashboardPage() {
+export default function DashboardPage() {
   return (
-    <main className="grid gap-6">
-      <div className="flex items-center justify-between">
+    <div className="grid gap-6">
+      <section className="flex items-center justify-between gap-2">
         <div>
-          <div className="text-2xl font-semibold">Podgląd</div>
-          <div className="text-sm text-white/60">Szybkie wykresy i metryki</div>
+          <div className="text-2xl font-semibold">Pulpit</div>
+          <div className="muted text-sm">Podgląd mocy, cen i historii</div>
         </div>
-      </div>
+      </section>
 
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card title="Ceny Day‑Ahead" subtitle="ENTSO‑E → PLN/MWh">
           <ClientChart />
         </Card>
-
-        <Card title="FoxESS – moc teraz" subtitle="PV / eksport / import">
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <div>
-              <div className="text-2xl font-semibold">—</div>
-              <div className="muted text-xs">PV</div>
-            </div>
-            <div>
-              <div className="text-2xl font-semibold">—</div>
-              <div className="muted text-xs">Eksport</div>
-            </div>
-            <div>
-              <div className="text-2xl font-semibold">—</div>
-              <div className="muted text-xs">Import</div>
-            </div>
-          </div>
-        </Card>
-
-        <Card title="Net Billing – dziś" subtitle="Suma przychodu [PLN]">
+        <Card title="Moc teraz">
           <div className="text-3xl font-semibold">—</div>
-          <div className="muted text-xs mt-1">na podstawie zapisanych godzin</div>
+          <div className="muted text-sm">Połącz z FoxESS, aby zobaczyć</div>
+        </Card>
+        <Card title="Zysk dziś">
+          <div className="text-3xl font-semibold">—</div>
+          <div className="muted text-sm">Brak danych</div>
         </Card>
       </section>
-    </main>
+    </div>
   );
 }

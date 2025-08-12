@@ -1,3 +1,5 @@
+import React from 'react';
+
 export default function Card({
   title,
   subtitle,
@@ -6,24 +8,20 @@ export default function Card({
 }: {
   title?: string;
   subtitle?: string;
-  right?: React.ReactNode;   // slot na akcje po prawej
+  right?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="card-glass p-5">
-      {(title || right) ? (
-        <div className="mb-3 flex items-start justify-between gap-3">
+      {(title || subtitle || right) && (
+        <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            {title && (
-              <div className="text-sm font-medium text-white/80">{title}</div>
-            )}
-            {subtitle && (
-              <div className="text-xs text-white/60">{subtitle}</div>
-            )}
+            {title ? <div className="text-sm font-medium text-white/90">{title}</div> : null}
+            {subtitle ? <div className="muted text-xs">{subtitle}</div> : null}
           </div>
           {right ? <div className="shrink-0">{right}</div> : null}
         </div>
-      ) : null}
+      )}
       {children}
     </div>
   );
