@@ -1,10 +1,6 @@
+// src/lib/foxess.ts
 /**
- * FoxESS Cloud Open API (private token auth)
- * Headers:
- *  - token: API key
- *  - timestamp: current ms
- *  - signature: md5(path + "\r\n" + token + "\r\n" + timestamp)  (with fallbacks)
- *  - lang: 'en'
+ * FoxESS Cloud API — prefer OAuth (Bearer), fallback to Private Token.
  */
 import crypto from "crypto";
 import { getToken } from "@/src/db/oauth";
@@ -13,54 +9,52 @@ const BASE = process.env.FOXESS_API_BASE || "https://www.foxesscloud.com";
 const TOKEN = process.env.FOXESS_API_KEY || "";
 const SN = process.env.FOXESS_DEVICE_SN || "";
 
-// foxFetch: try OAuth Bearer first, fallback to private-token signatures
-type Realtime = { pvPowerW: number; gridExportW: number; gridImportW: number; batterySOC?: number; raw?: any };
+type Realtime = {
+  pvPowerW: number;
+  gridExportW: number;
+  gridImportW: number;
+  batterySOC?: number;
+  raw?: any;
+};
 
-export async function getFoxRealtime(): Promise<Realtime> {
-  if (!TOKEN) {
-    return { pvPowerW: 3200, gridExportW: 500, gridImportW: 150 };
-  }
-  const path = "/op/v0/device/real/query"; const fallbackPath = "/op/v1/device/real/query";
-  if (!SN) throw new Error("FOXESS_DEVICE_SN nie ustawione");
-  const payload = { sn: SN, variables: [] as string[] };
-  let data:any = await foxFetch(path, "POST", payload); if (data?.errno === 40256) { data = await foxFetch(fallbackPath, "POST", payload); }
-  const result = (data as any)?.result || {};
-  const arr: Array<{ variable: string; value: number }> = Array.isArray(result) ? result : (result.datas || result.data || []);
-  let pvPowerW = 0, gridExportW = 0, gridImportW = 0, batterySOC: number | undefined = undefined;
-
-  const get = (name: string) => {
-    const hit = arr.find(x => x.variable?.toLowerCase() === name.toLowerCase());
-    return hit?.value;
-  };
-
-  pvPowerW = Number(get("pvPower") ?? get("pvpower") ?? get("pv1Power") ?? get("ppv") ?? 0);
-  const feedin = Number(get("feedinPower") ?? get("feedin") ?? 0);
-  const gridCons = Number(get("gridConsumptionPower") ?? get("gridConsumption") ?? 0);
-  gridExportW = Math.max(0, feedin);
-  gridImportW = Math.max(0, gridCons);
-  const soc = get("SoC") ?? get("soc") ?? get("batterySoC") ?? get("batterysoc");
-  if (typeof soc === "number") batterySOC = soc;
-
-  return { pvPowerW, gridExportW, gridImportW, batterySOC, raw: data };
-}
-
-
+// ONE foxFetch only
 async function foxFetch(path: string, method: "GET" | "POST", body?: any) {
-  if (!TOKEN) throw new Error("Brak FOXESS_API_KEY w ENV");
   const bodyStr = body ? JSON.stringify(body) : "";
+
+  // 1) OAuth Bearer
+  try {
+    const t = await getToken("foxess");
+    if (t?.accessToken) {
+      const res = await fetch(BASE + path, {
+        method,
+        headers: {
+          Authorization: `Bearer ${t.accessToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: bodyStr || undefined,
+        cache: "no-store",
+      });
+      let data: any;
+      try {
+        data = await res.json();
+      } catch {
+        data = await res.text();
+      }
+      if (res.ok) return data;
+      // jeśli 401/403 – lecimy fallbackiem
+    }
+  } catch {}
+
+  // 2) Private token fallback (różne warianty podpisu, jeśli chcesz korzystać z tego trybu)
+  if (!TOKEN) throw new Error("Brak FOXESS_API_KEY w ENV (fallback private-token)");
   const bodyHash = crypto.createHash("md5").update(bodyStr).digest("hex");
   const tsMs = Date.now().toString();
-  const tsSec = Math.floor(Date.now()/1000).toString();
-
-  // Variants per in-the-wild implementations
-  const pathVars = Array.from(new Set([
-    path,
-    path.endsWith("/") ? path.slice(0,-1) : path + "/",
-    path.replace(/\/+$/,""),
-  ]));
+  const tsSec = Math.floor(Date.now() / 1000).toString();
+  const pathVars = Array.from(new Set([path, path.endsWith("/") ? path.slice(0, -1) : path + "/", path.replace(/\/+$/, "")]));
   const timeVars = [tsMs, tsSec];
-  const fmt = (b:Buffer, upper:boolean)=> upper ? b.toString("hex").toUpperCase() : b.toString("hex");
-  const signBases = (p:string, tok:string, t:string) => [
+  const fmt = (b: Buffer, upper: boolean) => (upper ? b.toString("hex").toUpperCase() : b.toString("hex"));
+  const signBases = (p: string, tok: string, t: string) => [
     `${p}\r\n${tok}\r\n${t}`,
     `${p}\n${tok}\n${t}`,
     `${p}${tok}${t}`,
@@ -74,20 +68,31 @@ async function foxFetch(path: string, method: "GET" | "POST", body?: any) {
       for (const base of signBases(p, TOKEN, t)) {
         for (const upper of [false, true]) {
           const sig = fmt(crypto.createHash("md5").update(base).digest(), upper);
-          const headers: Record<string,string> = {
-            "token": TOKEN,
-            "timestamp": t,
-            "signature": sig,
-            "lang": "en",
-            "Accept": "application/json", "Origin":"https://www.foxesscloud.com", "Referer":"https://www.foxesscloud.com/",
+          const headers: Record<string, string> = {
+            token: TOKEN,
+            timestamp: t,
+            signature: sig,
+            lang: "en",
+            Accept: "application/json",
+            Origin: "https://www.foxesscloud.com",
+            Referer: "https://www.foxesscloud.com/",
             "Content-Type": "application/json",
           };
-          const res = await fetch(BASE + p, { method, headers, body: bodyStr || undefined, cache: "no-store" });
-          let data: any = null;
-          try { data = await res.json(); } catch { data = await res.text(); }
+          const res = await fetch(BASE + p, {
+            method,
+            headers,
+            body: bodyStr || undefined,
+            cache: "no-store",
+          });
+          let data: any;
+          try {
+            data = await res.json();
+          } catch {
+            data = await res.text();
+          }
           last = data;
-          if (typeof data === 'object' && (data?.errno === 40256 || data?.msg?.toLowerCase?.().includes('illegal'))) {
-            continue; // try next variant
+          if (typeof data === "object" && (data?.errno === 40256 || data?.msg?.toLowerCase?.().includes("illegal"))) {
+            continue; // spróbuj kolejny wariant
           }
           if (!res.ok) throw new Error(`FoxESS HTTP ${res.status}: ${JSON.stringify(data)}`);
           return data;
@@ -98,66 +103,20 @@ async function foxFetch(path: string, method: "GET" | "POST", body?: any) {
   return last;
 }
 
+export async function getFoxRealtime(): Promise<Realtime> {
+  const path = "/op/v0/device/real/query";
+  if (!SN) throw new Error("FOXESS_DEVICE_SN nie ustawione");
+  const payload = { sn: SN, variables: [] as string[] };
+  const data: any = await foxFetch(path, "POST", payload);
+  const result = data?.result || {};
+  const arr: Array<{ variable: string; value: number }> = Array.isArray(result) ? result : result.datas || result.data || [];
 
-async function foxFetch(path: string, method: "GET" | "POST", body?: any) {
-  const bodyStr = body ? JSON.stringify(body) : "";
-  // 1) Try OAuth bearer if token exists
-  try {
-    const t = await getToken("foxess");
-    if (t?.accessToken) {
-      const res = await fetch(BASE + path, {
-        method,
-        headers: {
-          "Authorization": `Bearer ${t.accessToken}`,
-          "Content-Type": "application/json",
-          "Accept": "application/json"
-        },
-        body: bodyStr || undefined,
-        cache: "no-store"
-      });
-      let data: any = null;
-      try { data = await res.json(); } catch { data = await res.text(); }
-      if (res.ok) return data;
-      // if unauthorized, fall through to private token
-    }
-  } catch {}
+  const findVal = (name: string) => arr.find((x) => x.variable?.toLowerCase() === name.toLowerCase())?.value;
+  const pvPowerW = Number(findVal("pvPower") ?? findVal("pv1Power") ?? findVal("ppv") ?? 0);
+  const feedin = Number(findVal("feedinPower") ?? findVal("feedin") ?? 0);
+  const gridCons = Number(findVal("gridConsumptionPower") ?? findVal("gridConsumption") ?? 0);
+  const soc = findVal("SoC") ?? findVal("soc") ?? findVal("batterySoC") ?? findVal("batterysoc");
+  const batterySOC = typeof soc === "number" ? soc : undefined;
 
-  // 2) Private token fallback (with signature variants)
-  if (!TOKEN) throw new Error("Brak FOXESS_API_KEY w ENV (fallback private-token)");
-  const bodyHash = crypto.createHash("md5").update(bodyStr).digest("hex");
-  const tsMs = Date.now().toString();
-  const tsSec = Math.floor(Date.now()/1000).toString();
-  const pathVars = Array.from(new Set([path, path.endswith('/') ? path.slice(0,-1) : path + '/', path.replace(/\/+$/,'')]));
-  const timeVars = [tsMs, tsSec];
-  const fmt = (b:Buffer, upper:boolean)=> upper ? b.toString("hex").toUpperCase() : b.toString("hex");
-  const signBases = (p:string, tok:string, t:string) => [
-    `${p}\r\n${tok}\r\n${t}`,
-    `${p}\n${tok}\n${t}`,
-    `${p}${tok}${t}`,
-    `${p}\r\n${tok}\r\n${t}\r\n${bodyHash}`,
-    `${p}\n${tok}\n${t}\n${bodyHash}`,
-  ];
-
-  let last: any = null;
-  for (const p of pathVars) {
-    for (const t of timeVars) {
-      for (const base of signBases(p, TOKEN, t)) {
-        for (const upper of [false, true]) {
-          const sig = fmt(crypto.createHash("md5").update(base).digest(), upper);
-          const headers: Record<string,string> = {
-            "token": TOKEN, "timestamp": t, "signature": sig, "lang": "en",
-            "Content-Type": "application/json", "Accept": "application/json",
-            "Origin":"https://www.foxesscloud.com", "Referer":"https://www.foxesscloud.com/"
-          };
-          const res = await fetch(BASE + p, { method, headers, body: bodyStr || undefined, cache: "no-store" });
-          let data: any = null; try { data = await res.json(); } catch { data = await res.text(); }
-          last = data;
-          if (typeof data === 'object' && (data?.errno === 40256 || data?.msg?.toLowerCase?.().includes('illegal'))) continue;
-          if (!res.ok) throw new Error(`FoxESS HTTP ${res.status}: ${JSON.stringify(data)}`);
-          return data;
-        }
-      }
-    }
-  }
-  return last;
+  return { pvPowerW, gridExportW: Math.max(0, feedin), gridImportW: Math.max(0, gridCons), batterySOC, raw: data };
 }
