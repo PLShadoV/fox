@@ -1,5 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
+import PageHeader from '@/components/ui/PageHeader';
+import Card from '@/components/ui/Card';
+import { Calendar, Download } from 'lucide-react';
 
 export default function PricesPage() {
   const [date, setDate] = useState<string>('today');
@@ -20,29 +23,26 @@ export default function PricesPage() {
 
   return (
     <main className="grid gap-4">
-      <div className="card flex items-center justify-between">
-        <div>
-          <div className="font-semibold">Ceny – Day-Ahead (ENTSO-E)</div>
-          <div className="text-xs text-gray-400">PL strefa rynkowa</div>
-        </div>
-        <div className="flex gap-2">
-          <input className="px-2 py-1 bg-slate-800 rounded" value={date} onChange={e=>setDate(e.target.value)} placeholder="YYYY-MM-DD lub 'today'" />
-          <button onClick={loadDA} className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-700">Pobierz</button>
-        </div>
-      </div>
-      <div className="card"><pre className="text-xs">{JSON.stringify(da, null, 2)}</pre></div>
+      <PageHeader title="Ceny energii" subtitle="Day‑Ahead (ENTSO‑E) i RCEm (PSE/OIRE)" />
+      <div className="container grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card title="Day‑Ahead" subtitle="Cena godzinowa" right={
+          <div className="flex items-center gap-2">
+            <input className="input w-44" value={date} onChange={e=>setDate(e.target.value)} placeholder="YYYY-MM-DD lub 'today'" />
+            <button onClick={loadDA} className="btn"><Calendar size={16}/> Pobierz</button>
+          </div>
+        }>
+          <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(da, null, 2)}</pre>
+        </Card>
 
-      <div className="card flex items-center justify-between">
-        <div>
-          <div className="font-semibold">RCEm – Miesięczna cena rynkowa</div>
-          <div className="text-xs text-gray-400">Źródło: PSE/OIRE lub ENV</div>
-        </div>
-        <div className="flex gap-2">
-          <input className="px-2 py-1 bg-slate-800 rounded" value={yyyymm} onChange={e=>setYyyymm(e.target.value)} placeholder="YYYY-MM" />
-          <button onClick={loadRCEm} className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-700">Pobierz</button>
-        </div>
+        <Card title="RCEm" subtitle="Cena miesięczna" right={
+          <div className="flex items-center gap-2">
+            <input className="input w-36" value={yyyymm} onChange={e=>setYyyymm(e.target.value)} placeholder="YYYY-MM" />
+            <button onClick={loadRCEm} className="btn"><Download size={16}/> Pobierz</button>
+          </div>
+        }>
+          <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(rcem, null, 2)}</pre>
+        </Card>
       </div>
-      <div className="card"><pre className="text-xs">{JSON.stringify(rcem, null, 2)}</pre></div>
     </main>
   );
 }

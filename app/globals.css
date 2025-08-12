@@ -1,11 +1,51 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --bg: #0b0f16;
-  --card: #121826;
-  --muted: #9aa4b2;
+  --bg: 222 47% 6%;
+  --bg-grad-1: #0B1220;
+  --bg-grad-2: #0A0F1C;
+  --card: 222 47% 11%;
+  --card-2: 222 47% 13%;
+  --muted: 215 20% 65%;
 }
-body { background: var(--bg); color: #e5e7eb; }
-.card { background: var(--card); border-radius: 1rem; padding: 1rem; }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  background: radial-gradient(1200px 600px at 80% -10%, rgba(0,161,255,0.15), transparent 60%),
+              radial-gradient(800px 400px at -10% 0%, rgba(120,119,198,0.2), transparent 50%),
+              linear-gradient(180deg, var(--bg-grad-1), var(--bg-grad-2));
+  color: hsl(214 32% 91%);
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+.card {
+  @apply rounded-2xl p-5;
+  background: linear-gradient(180deg, hsla(var(--card)/0.9), hsla(var(--card)/0.8));
+  border: 1px solid rgba(255,255,255,0.06);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04);
+  backdrop-filter: blur(8px);
+}
+
+.btn {
+  @apply inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition;
+  background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.05));
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.btn:hover { transform: translateY(-1px); }
+.btn-primary {
+  background: linear-gradient(180deg, rgba(59,130,246,0.25), rgba(59,130,246,0.18));
+  border-color: rgba(59,130,246,0.35);
+}
+.input {
+  @apply px-3 py-2 rounded-xl text-sm bg-transparent outline-none w-full;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.kbd { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+.muted { color: hsl(var(--muted)); }
+.hr { height:1px; background: rgba(255,255,255,0.08); }
+.container { @apply max-w-7xl mx-auto p-4 md:p-6; }

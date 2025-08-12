@@ -1,5 +1,8 @@
 'use client';
 import { useState } from 'react';
+import PageHeader from '@/components/ui/PageHeader';
+import Card from '@/components/ui/Card';
+import { PlugZap, RefreshCw, Power } from 'lucide-react';
 
 export default function TuyaPage() {
   const [deviceId, setDeviceId] = useState('');
@@ -14,12 +17,11 @@ export default function TuyaPage() {
     setLog(r.ok ? 'OK' : (j?.error || 'Błąd'));
   };
 
-  const sendCommand = async () => {
-    setLog('Wysyłam komendę włącz...');
+  const sendCommand = async (value: boolean) => {
+    setLog(`Wysyłam komendę ${value ? 'włącz' : 'wyłącz'}...`);
     const r = await fetch('/api/control/tuya', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId, dpCode: 'switch_1', value: true })
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId, dpCode: 'switch_1', value })
     });
     const j = await r.json();
     setLog(r.ok ? 'Komenda wysłana' : (j?.error || 'Błąd'));
@@ -27,17 +29,26 @@ export default function TuyaPage() {
 
   return (
     <main className="grid gap-4">
-      <div className="card">
-        <div className="font-semibold mb-2">Tuya / SmartLife</div>
-        <div className="flex gap-2 items-center">
-          <input className="px-2 py-1 bg-slate-800 rounded w-80" placeholder="deviceId" value={deviceId} onChange={e=>setDeviceId(e.target.value)} />
-          <button onClick={readStatus} className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-700">Status</button>
-          <button onClick={sendCommand} className="px-3 py-1 rounded bg-green-600 hover:bg-green-700">Włącz</button>
-        </div>
-        <div className="text-xs text-gray-400 mt-2">{log}</div>
-      </div>
-      <div className="card">
-        <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(status, null, 2)}</pre>
+      <PageHeader title="Tuya / SmartLife" subtitle="Status i sterowanie urządzeniami" />
+      <div className="container grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card title="Urządzenie" subtitle="Podaj deviceId">
+          <div className="flex gap-2">
+            <input className="input w-full" placeholder="deviceId" value={deviceId} onChange={e=>setDeviceId(e.target.value)} />
+            <button onClick={readStatus} className="btn"><RefreshCw size={16}/> Status</button>
+            <button onClick={()=>sendCommand(true)} className="btn btn-primary"><Power size={16}/> Włącz</button>
+          </div>
+          <div className="text-xs muted mt-2">{log}</div>
+        </Card>
+        <Card title="Status DP">
+          <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(status, null, 2)}</pre>
+        </Card>
+        <Card title="Wskazówki" subtitle="Jak zdobyć deviceId">
+          <ul className="list-disc pl-5 text-sm space-y-2">
+            <li>Połącz konto Smart Life w Tuya Cloud (Link App Account).</li>
+            <li>Sprawdź listę urządzeń w projekcie – tam znajdziesz deviceId licznika.</li>
+            <li>Wpisz deviceId powyżej i odczytaj status.</li>
+          </ul>
+        </Card>
       </div>
     </main>
   );
