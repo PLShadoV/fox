@@ -1,5 +1,8 @@
+// app/layout.tsx
+import './globals.css'; // ← TO JEST KLUCZOWE!
+
 export const metadata = {
-  title: 'NetBilling Dashboard',
+  title: 'Net-Billing',
   description: 'FoxESS • Tuya • Ceny',
 };
 
