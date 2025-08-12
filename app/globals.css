@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 246 247 249;
+  --card: 255 255 255;
+  --text: 18 23 35;
+  --muted: 107 114 128;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  @apply bg-[rgb(var(--bg))] text-[rgb(var(--text))];
+}
+.container {
+  @apply max-w-6xl mx-auto px-4;
+}
+
+.card {
+  @apply bg-[rgb(var(--card))] rounded-2xl shadow-soft p-5;
+}
+
+.h1 {
+  @apply text-2xl md:text-3xl font-semibold tracking-tight;
+}
+
+.h2 {
+  @apply text-lg md:text-xl font-semibold;
+}
+
+.kpi {
+  @apply text-2xl font-semibold;
+}
+.kpi-sub {
+  @apply text-sm text-gray-500;
+}
+
+.button { @apply px-3 py-2 rounded-full border; }
