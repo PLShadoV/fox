@@ -5,7 +5,7 @@ const TOKEN = process.env.FOXESS_API_KEY || "";
 const SN = process.env.FOXESS_DEVICE_SN || "";
 const TZ = process.env.FOXESS_TIMEZONE || "Europe/Warsaw";
 
-type Realtime = { pvPowerW: number; gridExportW: number; gridImportW: number; batterySOC?: number; raw?: any };
+export type Realtime = { pvPowerW: number; gridExportW: number; gridImportW: number; batterySOC?: number; raw?: any };
 
 function md5Hex(x:string, upper=false){ const h=crypto.createHash('md5').update(x).digest('hex'); return upper? h.toUpperCase(): h; }
 

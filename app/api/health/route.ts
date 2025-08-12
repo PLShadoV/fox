@@ -11,10 +11,5 @@ export async function GET(){
     base: process.env.FOXESS_API_BASE || "https://www.foxesscloud.com",
     tz: process.env.FOXESS_TIMEZONE || "Europe/Warsaw"
   };
-  return NextResponse.json({
-    ok: true,
-    env,
-    timeNow: new Date().toISOString(),
-    nodeVersion: process.version
-  });
+  return NextResponse.json({ ok: true, env, timeNow: new Date().toISOString(), nodeVersion: process.version });
 }
