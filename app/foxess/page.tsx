@@ -35,27 +35,7 @@ export default function FoxessPage() {
           <div className="muted text-sm">Dane w czasie rzeczywistym (Cloud API)</div>
         </div>
         <div className="flex gap-2">
-          <button onClick={load} className="btn btn-primary"><RefreshCw size={16}/> Odśwież</button>
-          {!connected && <a className="btn" href="/api/foxess/login"><LinkIcon size={16}/> Połącz</a>}
-        </div>
-      </div>
-
-      {!connected && (
-        <Card title="Połącz FoxESS" subtitle="Uwierzytelnij dostęp przez OAuth (bezpieczniej niż token prywatny)">
-          <p className="text-sm">Status: <span className="badge">niepołączone</span> {reason && <span className="muted">({reason})</span>}</p>
-          <div className="mt-3"><a className="btn btn-primary" href="/api/foxess/login"><LinkIcon size={16}/> Zaloguj i udziel dostępu</a></div>
-        </Card>
-      )}
-
-      <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Tile title="PV" value={data?.pvPowerW ?? (loading?'…':'—')} icon={<Bolt size={18} />} hint="W" />
-        <Tile title="Eksport" value={data?.gridExportW ?? (loading?'…':'—')} icon={<ArrowUpRight size={18} />} hint="W" />
-        <Tile title="Import" value={data?.gridImportW ?? (loading?'…':'—')} icon={<ArrowDownLeft size={18} />} hint="W" />
-        <Tile title="SOC" value={data?.batterySOC ?? (loading?'…':'—')} icon={<BatteryCharging size={18} />} hint="%" />
-      </section>
-
-      <Card title="Szczegóły">
-        {error && <div className="mb-3 px-3 py-2 rounded-xl border border-red-500/40 bg-red-500/10 text-red-200 text-sm">{error}</div>}
+          <button onClick={load} className="btn btn-primary">Odśwież</button></div>}
         {loading ? <div className="skeleton h-32 rounded-xl" /> : <JsonTree data={data ?? {}} />}
       </Card>
     </main>
