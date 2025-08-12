@@ -6,15 +6,13 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest){
   try{
-    const fast = req.nextUrl.searchParams.get('fast') === '1';
-    const attempts = Number(req.nextUrl.searchParams.get('attempts') || 24);
-    const timeoutMs = Number(req.nextUrl.searchParams.get('timeoutMs') || 3000);
-    const data:any = await getFoxRealtime({ fast, maxAttempts: attempts, perAttemptMs: timeoutMs });
-    const errno = data?.raw?.errno;
+    // getFoxRealtime() no longer accepts params – timeouts/attempts są w środku klienta
+    const data:any = await getFoxRealtime();
+    const errno = data?.raw?.errno ?? null;
     const ok = !errno;
     return NextResponse.json({
       ok,
-      errno: errno ?? null,
+      errno,
       sample: { pvPowerW: data?.pvPowerW, gridExportW: data?.gridExportW, gridImportW: data?.gridImportW },
       raw: data?.raw ?? null
     }, { status: ok? 200: 502 });
