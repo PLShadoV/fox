@@ -9,22 +9,24 @@ datasource db {
 
 model InverterReading {
   id           String   @id @default(cuid())
-  ts           DateTime @index
+  ts           DateTime
   pvPowerW     Int
   gridExportW  Int
   gridImportW  Int
   batterySOC   Int?
+  @@index([ts])
 }
 
 model MeterReading {
   id        String   @id @default(cuid())
-  ts        DateTime @index
+  ts        DateTime
   phaseA_W  Int?
   phaseB_W  Int?
   phaseC_W  Int?
   importWh  Int?
   exportWh  Int?
   deviceId  String?
+  @@index([ts])
 }
 
 model PriceHour {
