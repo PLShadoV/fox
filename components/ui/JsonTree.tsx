@@ -14,7 +14,7 @@ function Node({ k, v, level=0 }:{k?:string; v:any; level?:number}){
       </div>
     );
   }
-  return <div style={{ marginLeft: level?12:0 }}><span className="muted">{k}:</span> <span className="kbd">{String(v)}</span></div>;
+  return <div style={{ marginLeft: level?12:0 }}><span className="muted">{k}:</span> <span>{String(v)}</span></div>;
 }
 
 export default function JsonTree({ data }:{ data:any }){
