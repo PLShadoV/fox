@@ -2,23 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Utility przycisków */
+/* prosty “glass” i przyciski pasujące do ciemnego motywu */
+.card-glass {
+  @apply rounded-2xl border border-white/10 bg-white/5 backdrop-blur;
+}
 .btn {
-  @apply inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-white/90 border border-white/10 bg-white/[0.06] hover:bg-white/[0.09] transition;
+  @apply rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm hover:bg-white/15 transition;
 }
 .btn-primary {
-  @apply bg-emerald-500/90 hover:bg-emerald-500 border-emerald-400/30 text-white;
+  @apply bg-emerald-600/80 hover:bg-emerald-600;
 }
-
-/* Tło „glass” */
-.card-glass {
-  background: radial-gradient(1200px 300px at 20% -10%, rgba(52,211,153,0.15), transparent 40%),
-              radial-gradient(600px 200px at 120% -10%, rgba(16,185,129,0.12), transparent 40%),
-              rgba(30,41,59,0.35);
-  backdrop-filter: blur(8px);
-}
-
-/* Przyjemne, ciemne tło */
-body {
-  @apply bg-slate-950 text-white;
+.muted {
+  @apply text-white/70;
 }
