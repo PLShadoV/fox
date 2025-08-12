@@ -23,7 +23,7 @@ async function signedFetch(path: string, method: "GET" | "POST", bodyObj: any){
   const bodyStr = bodyObj ? JSON.stringify(bodyObj) : "";
   const bodyHash = md5Hex(bodyStr);
   const baseTs = Date.now(); // ms
-  const skews = [0, 10_000, -10_000, 60_000, -60_000, 300_000, -300_000]; // 0, ±10s, ±60s, ±5min
+  const skews = [0, 10_000, -10_000, 60_000, -60_000, 300_000, -300_000];
   const units: Array<'ms'|'sec'> = ['ms','sec'];
   const tsKeys = ['timestamp','timeStamp'];
   const tzKeys = ['timezone','timeZone','tz'];
@@ -59,7 +59,7 @@ async function signedFetch(path: string, method: "GET" | "POST", bodyObj: any){
                   };
                   const res = await fetch(BASE + p, { method, headers, body: bodyStr || undefined, cache: "no-store" });
                   let data:any=null; try { data=await res.json(); } catch { data=await res.text(); }
-                  last = { data, debug: { p, tkey, unit, skew, upper, tzKey, tzVal } };
+                  last = { data, debug: { p, tkey, unit, skew, upper, tzKey, tzVal, status: res.status } };
                   if (typeof data==='object' && (data?.errno===40256 || String(data?.msg||'').toLowerCase().includes('illegal'))) {
                     continue;
                   }
@@ -91,11 +91,9 @@ function mapRealtime(raw:any): Realtime {
 export async function getFoxRealtime(): Promise<Realtime> {
   if (!SN) throw new Error("FOXESS_DEVICE_SN nie ustawione");
 
-  // try with empty variables
   const basePayload = { sn: SN, variables: [] as string[] };
   const altPayload  = { sn: SN, variables: ["pvPower","feedinPower","gridConsumptionPower","SoC"] };
 
-  // v0 then v1; also retry with explicit variables if first round fails
   let r:any = await signedFetch("/op/v0/device/real/query", "POST", basePayload);
   let raw = r?.data ?? r;
   if (raw?.errno === 40256 || raw?.errno === 50000) {
