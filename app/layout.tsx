@@ -1,19 +1,19 @@
-import './globals.css';
-import Nav from '@/components/Nav';
-import type { Metadata } from 'next';
+import type { Metadata } from "next";
+import "./globals.css";
+import Nav from "@/components/Nav";
 
 export const metadata: Metadata = {
-  title: 'FoxESS Dashboard',
-  description: 'Minimal UI scaffold',
+  title: "FoxESS · RCE Dashboard",
+  description: "Lekki, szybki dashboard do odczytu danych z FoxESS i RCE",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="pl">
-      <body className="min-h-dvh bg-[#0e1117] text-white antialiased">
+      <body>
         <div className="mx-auto max-w-6xl p-4">
           <Nav />
-          <main className="mt-4">{children}</main>
+          {children}
         </div>
       </body>
     </html>

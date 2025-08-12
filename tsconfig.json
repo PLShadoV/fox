@@ -1,25 +1,40 @@
 {
   "compilerOptions": {
-    "baseUrl": "src",
-    "paths": {
-      "@/*": ["*"],
-      "@/components/*": ["components/*"],
-      "@lib/*": ["lib/*"],
-      "@/lib/*": ["lib/*"],
-      "@db": ["db"]
-    },
+    "target": "ES2021",
+    "lib": [
+      "dom",
+      "es2021"
+    ],
     "jsx": "preserve",
-    "lib": ["dom", "es2021"],
-    "target": "es2021",
     "module": "esnext",
-    "moduleResolution": "node",
-    "strict": false,
-    "allowJs": true,
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./*"
+      ],
+      "@/components/*": [
+        "components/*"
+      ],
+      "@/lib/*": [
+        "src/lib/*"
+      ]
+    },
+    "strict": true,
+    "allowJs": false,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "plugins": [{ "name": "next" }]
+    "types": [
+      "@types/node",
+      "@types/react",
+      "@types/react-dom"
+    ]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", ".next/types/**/*.ts"]
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts"
+  ]
 }

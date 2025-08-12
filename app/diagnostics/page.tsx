@@ -1,28 +1,18 @@
-'use client';
-import { useState } from 'react';
-import Card from '@/components/ui/Card';
-import JsonTree from '@/components/ui/JsonTree';
+import Card from "@/components/Card";
 
-export default function DiagnosticsPage(){
-  const [health, setHealth] = useState<any>(null);
-  const [dry, setDry] = useState<any>(null);
+async function getRealtime() {
+  const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ""}/api/foxess/realtime`, { cache: "no-store" });
+  return res.json();
+}
+
+export default async function Diagnostics() {
+  const rt = await getRealtime();
   return (
-    <main className="grid gap-6">
-      <div>
-        <div className="text-2xl font-semibold">Diagnostyka</div>
-        <div className="muted text-sm">Szybkie testy backendu i podpisów FoxESS</div>
-      </div>
-      <Card title="Health">
-        <div className="flex gap-2 mb-3">
-          <button className="btn btn-primary" onClick={async()=> setHealth(await (await fetch('/api/health')).json())}>Sprawdź /api/health</button>
-        </div>
-        {health && <JsonTree data={health} />}
-      </Card>
-      <Card title="FoxESS dry‑run (szukanie działającego podpisu)">
-        <div className="flex gap-2 mb-3">
-          <button className="btn" onClick={async()=> setDry(await (await fetch('/api/debug/foxess-dryrun')).json())}>Start</button>
-        </div>
-        {dry && <JsonTree data={dry} />}
+    <main className="grid gap-4">
+      <Card title="FoxESS realtime – raw">
+        <pre className="overflow-auto rounded-xl bg-black/40 p-3 text-xs">
+{JSON.stringify(rt, null, 2)}
+        </pre>
       </Card>
     </main>
   );
