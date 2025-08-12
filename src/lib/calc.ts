@@ -1,14 +1,12 @@
-import { prisma } from "@db";
+import { prisma } from "@/src/db";
 
 export async function getTodayNetPLN(): Promise<number> {
   if (!process.env.DATABASE_URL) return 0;
-  const start = new Date(); start.setHours(0,0,0,0);
-  const end = new Date(); end.setHours(23,59,59,999);
-  const rows = await prisma.profitHour.findMany({ where: { ts: { gte: start, lte: end } } });
-  return rows.reduce((acc, r) => acc + (r.netPLN || 0), 0);
-}
-
-// revenuePLN = (exportWh / 1000) * (pricePLNMWh / 1000)
-export function revenuePLN(exportWh: number, pricePLNMWh: number): number {
-  return (exportWh / 1000) * (pricePLNMWh / 1000);
+  const start = new Date();
+  start.setHours(0,0,0,0);
+  const rows = await prisma.profitHour.findMany({
+    where: { ts: { gte: start } },
+    select: { profitPLN: true }
+  });
+  return rows.reduce((s, r) => s + (r.profitPLN || 0), 0);
 }
