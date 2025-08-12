@@ -2,33 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
-/* FoxESS-like dark gradient */
-:root {
-  --bg-start: 12 10% 8%;
-  --bg-end: 220 60% 8%;
+/* Utility przycisków */
+.btn {
+  @apply inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-white/90 border border-white/10 bg-white/[0.06] hover:bg-white/[0.09] transition;
+}
+.btn-primary {
+  @apply bg-emerald-500/90 hover:bg-emerald-500 border-emerald-400/30 text-white;
 }
 
-html, body { height: 100%; }
+/* Tło „glass” */
+.card-glass {
+  background: radial-gradient(1200px 300px at 20% -10%, rgba(52,211,153,0.15), transparent 40%),
+              radial-gradient(600px 200px at 120% -10%, rgba(16,185,129,0.12), transparent 40%),
+              rgba(30,41,59,0.35);
+  backdrop-filter: blur(8px);
+}
 
+/* Przyjemne, ciemne tło */
 body {
-  @apply min-h-screen bg-gradient-to-br from-[hsl(var(--bg-start))] to-[hsl(var(--bg-end))] text-slate-100 antialiased;
-  background-attachment: fixed;
+  @apply bg-slate-950 text-white;
 }
-
-/* Scrollbars */
-* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.2) transparent; }
-*::-webkit-scrollbar { width: 8px; height: 8px; }
-*::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 9999px; }
-
-/* Glass cards */
-.card-glass { @apply rounded-2xl bg-white/5 backdrop-blur-md shadow-lg ring-1 ring-white/10; }
-
-/* Buttons */
-.btn-primary { @apply inline-flex items-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white px-4 py-2 shadow transition; }
-.btn-ghost { @apply inline-flex items-center gap-2 rounded-xl text-slate-200 hover:text-white hover:bg-white/5 px-3 py-2; }
-
-/* Table */
-.table { @apply w-full text-sm; }
-.table thead th { @apply text-left text-slate-300 font-medium pb-2; }
-.table tbody td { @apply py-2 text-slate-200; }
-.table tbody tr:not(:last-child) td { @apply border-b border-white/10; }
