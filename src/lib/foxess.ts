@@ -13,36 +13,6 @@ const TOKEN = process.env.FOXESS_API_KEY || "";
 const SN = process.env.FOXESS_DEVICE_SN || "";
 
 // Single foxFetch with signature variants to avoid "illegal signature" (errno 40256)
-async function foxFetch(path: string, method: "GET" | "POST", body?: any) {
-  if (!TOKEN) throw new Error("Brak FOXESS_API_KEY w ENV");
-  const timestamp = Date.now().toString();
-  const variants = [
-    (p:string,tok:string,ts:string)=>crypto.createHash("md5").update(`${p}\r\n${tok}\r\n${ts}`).digest("hex"),
-    (p:string,tok:string,ts:string)=>crypto.createHash("md5").update(`${p}\n${tok}\n${ts}`).digest("hex"),
-    (p:string,tok:string,ts:string)=>crypto.createHash("md5").update(`${p}${tok}${ts}`).digest("hex")
-  ];
-  let lastResp: any = null;
-  for (let i=0;i<variants.length;i++) {
-    const signature = variants[i](path, TOKEN, timestamp);
-    const headers: Record<string, string> = {
-      "token": TOKEN,
-      "timestamp": timestamp,
-      "signature": signature,
-      "lang": "en",
-      "Content-Type": "application/json",
-      "User-Agent": "NetBilling-Dashboard/1.0"
-    };
-    const res = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: "no-store" });
-    let data: any = null;
-    try { data = await res.json(); } catch { data = await res.text(); }
-    lastResp = data;
-    if (typeof data === 'object' && data?.errno === 40256) continue; // try next signature
-    if (!res.ok) throw new Error(`FoxESS HTTP ${res.status}: ${JSON.stringify(data)}`);
-    return data;
-  }
-  return lastResp;
-}
-
 type Realtime = { pvPowerW: number; gridExportW: number; gridImportW: number; batterySOC?: number; raw?: any };
 
 export async function getFoxRealtime(): Promise<Realtime> {
@@ -72,3 +42,58 @@ export async function getFoxRealtime(): Promise<Realtime> {
 
   return { pvPowerW, gridExportW, gridImportW, batterySOC, raw: data };
 }
+
+
+async function foxFetch(path: string, method: "GET" | "POST", body?: any) {
+  if (!TOKEN) throw new Error("Brak FOXESS_API_KEY w ENV");
+  const bodyStr = body ? JSON.stringify(body) : "";
+  const bodyHash = crypto.createHash("md5").update(bodyStr).digest("hex");
+  const tsMs = Date.now().toString();
+  const tsSec = Math.floor(Date.now()/1000).toString();
+
+  // Variants per in-the-wild implementations
+  const pathVars = Array.from(new Set([
+    path,
+    path.endsWith("/") ? path.slice(0,-1) : path + "/",
+    path.replace(/\/+$/,""),
+  ]));
+  const timeVars = [tsMs, tsSec];
+  const fmt = (b:Buffer, upper:boolean)=> upper ? b.toString("hex").toUpperCase() : b.toString("hex");
+  const signBases = (p:string, tok:string, t:string) => [
+    `${p}\r\n${tok}\r\n${t}`,
+    `${p}\n${tok}\n${t}`,
+    `${p}${tok}${t}`,
+    `${p}\r\n${tok}\r\n${t}\r\n${bodyHash}`,
+    `${p}\n${tok}\n${t}\n${bodyHash}`,
+  ];
+
+  let last: any = null;
+  for (const p of pathVars) {
+    for (const t of timeVars) {
+      for (const base of signBases(p, TOKEN, t)) {
+        for (const upper of [false, true]) {
+          const sig = fmt(crypto.createHash("md5").update(base).digest(), upper);
+          const headers: Record<string,string> = {
+            "token": TOKEN,
+            "timestamp": t,
+            "signature": sig,
+            "lang": "en",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          };
+          const res = await fetch(BASE + p, { method, headers, body: bodyStr || undefined, cache: "no-store" });
+          let data: any = null;
+          try { data = await res.json(); } catch { data = await res.text(); }
+          last = data;
+          if (typeof data === 'object' && (data?.errno === 40256 || data?.msg?.toLowerCase?.().includes('illegal'))) {
+            continue; // try next variant
+          }
+          if (!res.ok) throw new Error(`FoxESS HTTP ${res.status}: ${JSON.stringify(data)}`);
+          return data;
+        }
+      }
+    }
+  }
+  return last;
+}
+
