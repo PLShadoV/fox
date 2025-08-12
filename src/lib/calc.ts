@@ -1,6 +1,7 @@
 import { prisma } from "@db";
 
 export async function getTodayNetPLN(): Promise<number> {
+  if (!process.env.DATABASE_URL) return 0;
   const start = new Date(); start.setHours(0,0,0,0);
   const end = new Date(); end.setHours(23,59,59,999);
   const rows = await prisma.profitHour.findMany({ where: { ts: { gte: start, lte: end } } });
