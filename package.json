@@ -19,9 +19,8 @@
     "zod": "^3.23.8",
     "fast-xml-parser": "^4.4.1",
     "lucide-react": "^0.468.0",
-    "clsx": "^2.1.1"
-"foxess-lib": "^0.6.6"
-
+    "clsx": "^2.1.1",
+    "foxess-lib": "^0.6.6"
   },
   "devDependencies": {
     "@types/node": "^20.14.10",
