@@ -5,12 +5,14 @@ import React, { useEffect, useState } from 'react';
 import Card from '@/components/ui/Card';
 import Tile from '@/components/ui/Tile';
 import JsonTree from '@/components/ui/JsonTree';
-import { RefreshCw, BatteryCharging, ArrowDownLeft, ArrowUpRight, Bolt } from 'lucide-react';
+import { RefreshCw, BatteryCharging, ArrowDownLeft, ArrowUpRight, Bolt, PlugZap } from 'lucide-react';
 
 export default function FoxessPage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(undefined);
+  const [ping, setPing] = useState<any>(null);
+  const [pinging, setPinging] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -27,6 +29,19 @@ export default function FoxessPage() {
     }
   }
 
+  async function testPing(){
+    setPinging(true);
+    try {
+      const res = await fetch('/api/foxess/ping', { cache: 'no-store' });
+      const j = await res.json();
+      setPing({ status: res.status, body: j });
+    } catch (e:any) {
+      setPing({ status: 0, body: { ok:false, error: e?.message || String(e) } });
+    } finally {
+      setPinging(false);
+    }
+  }
+
   useEffect(() => { load(); }, []);
 
   return (
@@ -38,7 +53,8 @@ export default function FoxessPage() {
         </div>
         <div className="flex gap-2">
           <button onClick={load} className="btn btn-primary"><RefreshCw size={16}/> Odśwież</button>
-          <a href="/api/foxess/ping" className="btn">/api/foxess/ping</a>
+          <a href="/api/foxess/ping" target="_blank" rel="noreferrer" className="btn">/api/foxess/ping</a>
+          <button onClick={testPing} className="btn"><PlugZap size={16}/> Test ping</button>
         </div>
       </div>
 
@@ -54,6 +70,16 @@ export default function FoxessPage() {
           ? <div className="mb-3 px-3 py-2 rounded-xl border border-red-500/40 bg-red-500/10 text-red-200 text-sm">{error}</div>
           : (loading ? <div className="skeleton h-32 rounded-xl" /> : <JsonTree data={data ?? {}} />)
         }
+      </Card>
+
+      <Card title="Ping API">
+        <div className="flex items-center gap-2 mb-3">
+          <button onClick={testPing} disabled={pinging} className="btn btn-primary">
+            {pinging ? 'Pinguję…' : 'Ping'}
+          </button>
+          <span className="muted text-sm">Otwórz w nowej karcie lub sprawdź wynik poniżej.</span>
+        </div>
+        {ping && <JsonTree data={ping} />}
       </Card>
     </main>
   );
