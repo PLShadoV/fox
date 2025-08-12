@@ -1,7 +1,7 @@
 import { ReactNode } from 'react';
 export default function Card({ children, title, subtitle, right }: { children: ReactNode; title?: string; subtitle?: string; right?: ReactNode }) {
   return (
-    <section className="card">
+    <section className="card p-5">
       {(title || subtitle || right) && (
         <div className="flex items-center justify-between mb-3">
           <div>

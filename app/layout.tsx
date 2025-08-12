@@ -1,4 +1,4 @@
-import Navbar from "@/components/ui/Navbar";
+import Sidebar from "@/components/ui/Sidebar";
 
 export const metadata = {
   title: "Net-Billing Dashboard",
@@ -8,9 +8,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="pl">
       <body>
-        <Navbar />
-        {children}
-        <footer className="container text-xs muted py-8">© {new Date().getFullYear()} Net‑Billing • Demo</footer>
+        <div className="app">
+          <Sidebar />
+          <div className="main">
+            {children}
+            <footer>© {new Date().getFullYear()} Net‑Billing • Demo</footer>
+          </div>
+        </div>
       </body>
     </html>
   );

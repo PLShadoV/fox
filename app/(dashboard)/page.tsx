@@ -1,12 +1,16 @@
-import PageHeader from "@/components/ui/PageHeader";
 import Tile from "@/components/ui/Tile";
+import Card from "@/components/ui/Card";
+import GaugeRing from "@/components/ui/GaugeRing";
 import { Bolt, ArrowDownLeft, ArrowUpRight, PiggyBank } from "lucide-react";
 import ClientChart from "./price-chart";
 
 export default async function DashboardPage() {
   return (
-    <main className="container grid gap-6">
-      <PageHeader title="Dashboard" subtitle="Podgląd mocy, przepływów i cen" />
+    <main className="grid gap-6">
+      <div>
+        <div className="text-2xl font-semibold">Podgląd mocy, przepływów i cen</div>
+        <div className="muted text-sm">Dane FoxESS + Tuya + ceny ENTSO‑E/PSE</div>
+      </div>
       <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Tile title="Moc PV" value={<span id="pvPower">—</span>} icon={<Bolt size={18} />} hint="W" />
         <Tile title="Eksport" value={<span id="expW">—</span>} icon={<ArrowUpRight size={18} />} hint="W" />
@@ -14,26 +18,21 @@ export default async function DashboardPage() {
         <Tile title="Zysk dziś" value={<span id="profit">—</span>} icon={<PiggyBank size={18} />} hint="PLN" />
       </section>
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 card">
-          <div className="flex items-center justify-between mb-2">
-            <div>
-              <div className="text-lg font-semibold">Ceny Day‑Ahead</div>
-              <div className="text-xs muted">ENTSO‑E → PLN/MWh</div>
-            </div>
-          </div>
+        <Card title="Ceny Day‑Ahead" subtitle="ENTSO‑E → PLN/MWh">
           <ClientChart />
-        </div>
-        <div className="card">
-          <div className="text-lg font-semibold mb-2">Szybki podgląd</div>
-          <ul className="text-sm space-y-2">
-            <li className="flex justify-between"><span className="muted">PV teraz</span><span id="pv-inline">—</span></li>
-            <li className="flex justify-between"><span className="muted">Eksport</span><span id="exp-inline">—</span></li>
-            <li className="flex justify-between"><span className="muted">Import</span><span id="imp-inline">—</span></li>
-            <li className="hr"></li>
-            <li className="flex justify-between"><span className="muted">Zysk dziś</span><span id="profit-inline">—</span></li>
-          </ul>
-        </div>
+        </Card>
+        <Card title="Moc teraz">
+          <div className="flex items-center justify-center"><GaugeRing value={0} suffix="kW" /></div>
+        </Card>
       </section>
+      <Card title="Szybki podgląd">
+        <ul className="text-sm space-y-2">
+          <li>• PV teraz — <span id="pv-inline">—</span></li>
+          <li>• Eksport — <span id="exp-inline">—</span></li>
+          <li>• Import — <span id="imp-inline">—</span></li>
+          <li>• Zysk dziś — <span id="profit-inline">—</span></li>
+        </ul>
+      </Card>
       <script dangerouslySetInnerHTML={{__html: `
         (async function(){
           try {

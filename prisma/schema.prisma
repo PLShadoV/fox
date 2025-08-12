@@ -73,12 +73,3 @@ model DeviceAction {
 }
 
 
-model OAuthToken {
-  id           String   @id @default(cuid())
-  provider     String
-  accessToken  String
-  refreshToken String?
-  expiresAt    DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-}

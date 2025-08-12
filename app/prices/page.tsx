@@ -1,41 +1,30 @@
-
 'use client';
 import { useEffect, useState } from 'react';
-import PageHeader from '@/components/ui/PageHeader';
 import Card from '@/components/ui/Card';
 
-function VerticalTable({ rows, labelHour='Godzina', labelPrice='PLN/MWh', accessorHour='ts', accessorPrice='price' }:{ rows:any[], labelHour?:string, labelPrice?:string, accessorHour?:string, accessorPrice?:string }){
+function VTable({ rows, hourKey, priceKey }:{ rows:any[], hourKey:string, priceKey:string }){
   if (!Array.isArray(rows) || !rows.length) return <div className="muted text-sm">Brak danych</div>;
-  const fmtH = (v:any)=> {
+  const normHour = (v:any)=> {
     const s = String(v ?? '');
     return s.includes(':') ? s : String(v).padStart(2,'0') + ':00';
   };
-  const val = (x:any)=> Number(x?.[accessorPrice] ?? x?.rce_pln ?? x?.price_pln_mwh ?? x?.value);
-  const hour = (x:any)=> x?.[accessorHour] ?? x?.settlement_hour ?? x?.hour ?? x?.h;
   return (
     <div className="overflow-hidden rounded-2xl border border-white/10">
       <table className="w-full">
         <thead className="bg-white/5">
           <tr>
-            <th className="text-left p-2 text-xs uppercase tracking-wide muted">{labelHour}</th>
-            <th className="text-right p-2 text-xs uppercase tracking-wide muted">{labelPrice}</th>
+            <th className="text-left p-2 text-xs uppercase tracking-wide">Godzina</th>
+            <th className="text-right p-2 text-xs uppercase tracking-wide">PLN/MWh</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => {
-            const p = val(r);
-            // simple color accent
-            const min=150,max=900;
-            const clamp = Math.max(min, Math.min(max, p||min));
-            const ratio = (clamp-min)/(max-min);
-            const hue = 210 - Math.round(ratio*210);
-            const bg = `hsl(${hue} 70% 14% / 0.35)`;
+          {rows.map((r,i)=>{
+            const h = r?.[hourKey] ?? r?.settlement_hour ?? r?.hour ?? i;
+            const p = Number(r?.[priceKey] ?? r?.rce_pln ?? r?.price);
             return (
               <tr key={i} style={{ background: (i%2)? 'transparent' : 'rgba(255,255,255,0.02)' }}>
-                <td className="p-2">{fmtH(hour(r))}</td>
-                <td className="p-2 text-right">
-                  <span className="px-2 py-1 rounded-lg border" style={{ borderColor: `hsl(${hue} 70% 30% / 0.6)`, background: bg }}>{isFinite(p) ? p.toFixed(0) : '-'}</span>
-                </td>
+                <td className="p-2">{normHour(h)}</td>
+                <td className="p-2 text-right"><span className="badge">{isFinite(p)? p.toFixed(0): '-'}</span></td>
               </tr>
             );
           })}
@@ -49,52 +38,49 @@ export default function PricesPage() {
   const [date, setDate] = useState<string>('today');
   const [da, setDa] = useState<any[]>([]);
   const [rce, setRce] = useState<any[]>([]);
-  const [yyyymm, setYyyymm] = useState<string>('2025-08');
-  const [rcem, setRcem] = useState<any|null>(null);
 
-  const loadDA = async () => {
-    const r = await fetch('/api/prices/da?date=' + encodeURIComponent(date));
-    setDa(await r.json());
-  };
-  const loadRCE = async () => {
-    const r = await fetch('/api/prices/rce-pln?date=' + encodeURIComponent(date));
-    setRce(await r.json());
-  };
-  const loadRCEm = async () => {
-    const r = await fetch('/api/prices/rcem?yyyymm=' + encodeURIComponent(yyyymm));
-    setRcem(await r.json());
-  };
-
-  useEffect(() => { loadDA(); loadRCE(); }, []);
+  useEffect(() => { (async()=>{
+    setDa(await fetch('/api/prices/da?date=' + encodeURIComponent(date)).then(r=>r.json()));
+    setRce(await fetch('/api/prices/rce-pln?date=' + encodeURIComponent(date)).then(r=>r.json()));
+  })(); }, []);
 
   return (
-    <main className="grid gap-4">
-      <PageHeader title="Ceny energii" subtitle="Day‑Ahead (ENTSO‑E), RCE‑PLN (PSE) i RCEm" />
-      <div className="container grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card title="Day‑Ahead (ENTSO‑E)" subtitle="PLN/MWh">
-          <div className="flex gap-2 mb-3">
-            <input className="input w-44" value={date} onChange={e=>setDate(e.target.value)} placeholder="YYYY-MM-DD lub 'today'" />
-            <button onClick={loadDA} className="btn">Pobierz</button>
-          </div>
-          <VerticalTable rows={Array.isArray(da) ? da : []} accessorHour="ts" accessorPrice="price" />
-        </Card>
-
-        <Card title="RCE‑PLN (PSE)" subtitle="PLN/MWh">
-          <div className="flex gap-2 mb-3">
-            <input className="input w-44" value={date} onChange={e=>setDate(e.target.value)} placeholder="YYYY-MM-DD lub 'today'" />
-            <button onClick={loadRCE} className="btn">Pobierz</button>
-          </div>
-          <VerticalTable rows={Array.isArray(rce) ? rce : []} accessorHour="settlement_hour" accessorPrice="rce_pln" />
-        </Card>
-
-        <Card title="RCEm (miesięczna)" subtitle="PLN/MWh">
-          <div className="flex gap-2 mb-3">
-            <input className="input w-36" value={yyyymm} onChange={e=>setYyyymm(e.target.value)} placeholder="YYYY-MM" />
-            <button onClick={loadRCEm} className="btn">Pobierz</button>
-          </div>
-          <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(rcem, null, 2)}</pre>
-        </Card>
+    <main className="grid gap-6">
+      <div>
+        <div className="text-2xl font-semibold">Ceny</div>
+        <div className="muted text-sm">Day‑Ahead (ENTSO‑E) i RCE‑PLN (PSE)</div>
       </div>
+
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card title="Day‑Ahead (ENTSO‑E)" right={<div className="flex gap-2"><input className="input w-44" value={date} onChange={e=>setDate(e.target.value)} /><button className="btn" onClick={async()=>setDa(await fetch('/api/prices/da?date='+encodeURIComponent(date)).then(r=>r.json()))}>Pobierz</button></div>}>
+          <VTable rows={da} hourKey="ts" priceKey="price" />
+        </Card>
+        <Card title="RCE‑PLN (PSE)" right={<div className="flex gap-2"><input className="input w-44" value={date} onChange={e=>setDate(e.target.value)} /><button className="btn" onClick={async()=>setRce(await fetch('/api/prices/rce-pln?date='+encodeURIComponent(date)).then(r=>r.json()))}>Pobierz</button></div>}>
+          <VTable rows={rce} hourKey="settlement_hour" priceKey="rce_pln" />
+        </Card>
+      </section>
     </main>
+  );
+}
+
+
+function RCEmCard(){
+  const [yyyymm, setYyyymm] = useState<string>(new Date().toISOString().slice(0,7));
+  const [res, setRes] = useState<any>(null);
+  const fetchRCEm = async ()=> setRes(await fetch('/api/prices/rcem?yyyymm='+encodeURIComponent(yyyymm)).then(r=>r.json()));
+  useEffect(()=>{ fetchRCEm(); }, []);
+  return (
+    <Card title="RCEm (miesięczna)">
+      <div className="flex gap-2 mb-3">
+        <input className="input w-40" value={yyyymm} onChange={e=>setYyyymm(e.target.value)} />
+        <button className="btn" onClick={fetchRCEm}>Pobierz</button>
+      </div>
+      {res ? <div className="text-sm">
+        <div><b>Miesiąc:</b> {res.yyyymm}</div>
+        <div><b>Średnia:</b> {res.average ?? '-'} PLN/MWh</div>
+        <div><b>Min/Max:</b> {res.min ?? '-'} / {res.max ?? '-'}</div>
+        <div className="muted text-xs mt-2">Wyliczone z godzinowych RCE-PLN w danym miesiącu.</div>
+      </div> : <div className="muted text-sm">Brak</div>}
+    </Card>
   );
 }
