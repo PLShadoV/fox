@@ -43,6 +43,18 @@ export default function PricesPage() {
           <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(rcem, null, 2)}</pre>
         </Card>
       </div>
+    
+      <div className="container grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card title="RCE‑PLN (PSE)" subtitle="Cena godzinowa w PLN/MWh" right={
+          <div className="flex items-center gap-2">
+            <input className="input w-36" value={date} onChange={e=>setDate(e.target.value)} placeholder="YYYY-MM-DD lub 'today'" />
+            <button onClick={async()=>{ const r = await fetch('/api/prices/rce-pln?date='+encodeURIComponent(date)); const j = await r.json(); setDa(j); }} className="btn">Pobierz</button>
+          </div>
+        }>
+          <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(da, null, 2)}</pre>
+        </Card>
+      </div>
     </main>
+    
   );
 }

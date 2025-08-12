@@ -29,3 +29,32 @@ export async function getRCEmMonth(yyyymm: string) {
   const defv = Number(process.env.RCEM_DEFAULT_PLNMWH || "450");
   return { yyyymm, rcemPLNMWh: defv };
 }
+
+
+/**
+ * PSE API v2 – RCE-PLN (https://api.raporty.pse.pl/api/rce-pln)
+ * Zwraca listę godzinowych cen w PLN/MWh dla podanego dnia.
+ * date: 'today' lub 'YYYY-MM-DD'
+ */
+export async function getRCEPLN(date: string) {
+  let day: string;
+  if (date === 'today') {
+    const d = new Date();
+    const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,'0'); const dd = String(d.getDate()).padStart(2,'0');
+    day = `${y}-${m}-${dd}`;
+  } else {
+    day = date;
+  }
+  const base = process.env.PSE_API_BASE || "https://api.raporty.pse.pl/api";
+  // OData-like filter by business_date; API often accepts eq 'YYYY-MM-DD'
+  const url = `${base}/rce-pln?$filter=business_date eq '${day}'`;
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`PSE RCE-PLN HTTP ${res.status}: ${t}`);
+  }
+  const data = await res.json();
+  // Normalize to [{hour, rce_pln, business_date, udtczas}]
+  const rows = Array.isArray(data?.value) ? data.value : (Array.isArray(data) ? data : []);
+  return rows;
+}
