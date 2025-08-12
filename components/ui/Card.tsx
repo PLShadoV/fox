@@ -1,17 +1,8 @@
-import { ReactNode } from 'react';
-export default function Card({ children, title, subtitle, right }: { children: ReactNode; title?: string; subtitle?: string; right?: ReactNode }) {
+export default function Card({ title, children }: { title?: string; children: React.ReactNode }) {
   return (
-    <section className="card p-5">
-      {(title || subtitle || right) && (
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            {title && <div className="text-lg font-semibold">{title}</div>}
-            {subtitle && <div className="text-xs muted">{subtitle}</div>}
-          </div>
-          {right}
-        </div>
-      )}
+    <div className="card-glass p-5">
+      {title ? <div className="mb-3 text-sm font-medium text-white/80">{title}</div> : null}
       {children}
-    </section>
+    </div>
   );
 }

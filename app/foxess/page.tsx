@@ -1,85 +1,53 @@
-/* eslint-disable */
-// @ts-nocheck
-'use client';
-import React, { useEffect, useState } from 'react';
-import Card from '@/components/ui/Card';
-import Tile from '@/components/ui/Tile';
-import JsonTree from '@/components/ui/JsonTree';
-import { RefreshCw, BatteryCharging, ArrowDownLeft, ArrowUpRight, Bolt, PlugZap } from 'lucide-react';
+import Card from "@/components/ui/Card";
 
-export default function FoxessPage() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(undefined);
-  const [ping, setPing] = useState<any>(null);
-  const [pinging, setPinging] = useState(false);
+export const dynamic = "force-dynamic";
 
-  async function load() {
-    setLoading(true);
-    setError(undefined);
-    try {
-      const res = await fetch('/api/ingest/foxess');
-      const j = await res.json();
-      if (!res.ok) throw new Error(j?.error || 'Błąd FoxESS');
-      setData(j);
-    } catch (e) {
-      setError(e?.message || String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
+async function fetchPing() {
+  try {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ""}/api/foxess/ping`, { cache: "no-store" });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
 
-  async function testPing(){
-    setPinging(true);
-    try {
-      const res = await fetch('/api/foxess/ping', { cache: 'no-store' });
-      const j = await res.json();
-      setPing({ status: res.status, body: j });
-    } catch (e:any) {
-      setPing({ status: 0, body: { ok:false, error: e?.message || String(e) } });
-    } finally {
-      setPinging(false);
-    }
-  }
+function Tile({ label, value, suffix }: { label: string; value: string | number; suffix?: string }) {
+  return (
+    <div className="card-glass p-5">
+      <div className="text-sm/5 text-white/70">{label}</div>
+      <div className="mt-1 text-3xl font-semibold tracking-tight">
+        {value}{suffix ? <span className="ml-1 text-white/60 text-lg">{suffix}</span> : null}
+      </div>
+    </div>
+  );
+}
 
-  useEffect(() => { load(); }, []);
+export default async function FoxessPage() {
+  const data = await fetchPing();
+  const pv = data?.sample?.pvPowerW ?? 0;
+  const exp = data?.sample?.gridExportW ?? 0;
+  const imp = data?.sample?.gridImportW ?? 0;
 
   return (
-    <main className="grid gap-6">
+    <main className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-2xl font-semibold">FoxESS</div>
-          <div className="muted text-sm">Dane w czasie rzeczywistym (Private Token)</div>
+          <h1 className="text-2xl font-semibold tracking-tight">FoxESS</h1>
+          <p className="text-sm text-slate-400">Stan inwertera i telemetry</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={load} className="btn btn-primary"><RefreshCw size={16}/> Odśwież</button>
-          <a href="/api/foxess/ping" target="_blank" rel="noreferrer" className="btn">/api/foxess/ping</a>
-          <button onClick={testPing} className="btn"><PlugZap size={16}/> Test ping</button>
-        </div>
+        <a href="/api/foxess/ping" target="_blank" className="btn-primary">Test ping</a>
       </div>
 
-      <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Tile title="PV"      value={loading ? '…' : (data?.pvPowerW ?? '—')}      icon={<Bolt size={18}/>}           hint="W" />
-        <Tile title="Eksport" value={loading ? '…' : (data?.gridExportW ?? '—')}   icon={<ArrowUpRight size={18}/>}   hint="W" />
-        <Tile title="Import"  value={loading ? '…' : (data?.gridImportW ?? '—')}   icon={<ArrowDownLeft size={18}/>}  hint="W" />
-        <Tile title="SOC"     value={loading ? '…' : (data?.batterySOC ?? '—')}    icon={<BatteryCharging size={18}/>} hint="%" />
-      </section>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Tile label="PV Power" value={pv} suffix="W" />
+        <Tile label="Feed-in" value={exp} suffix="W" />
+        <Tile label="Import" value={imp} suffix="W" />
+        <Tile label="Battery SoC" value="—" suffix="%" />
+      </div>
 
-      <Card title="Szczegóły">
-        {error
-          ? <div className="mb-3 px-3 py-2 rounded-xl border border-red-500/40 bg-red-500/10 text-red-200 text-sm">{error}</div>
-          : (loading ? <div className="skeleton h-32 rounded-xl" /> : <JsonTree data={data ?? {}} />)
-        }
-      </Card>
-
-      <Card title="Ping API">
-        <div className="flex items-center gap-2 mb-3">
-          <button onClick={testPing} disabled={pinging} className="btn btn-primary">
-            {pinging ? 'Pinguję…' : 'Ping'}
-          </button>
-          <span className="muted text-sm">Otwórz w nowej karcie lub sprawdź wynik poniżej.</span>
-        </div>
-        {ping && <JsonTree data={ping} />}
+      <Card title="Surowe dane">
+        <pre className="max-h-[420px] overflow-auto text-xs text-slate-200">
+{JSON.stringify(data?.raw ?? data, null, 2)}
+        </pre>
       </Card>
     </main>
   );

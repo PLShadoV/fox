@@ -1,31 +1,21 @@
-'use client';
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { SunMedium, Gauge, Zap, Coins } from 'lucide-react';
-import clsx from 'clsx';
+import Link from "next/link";
+import { Bolt, PiggyBank, Upload, Import } from "lucide-react";
 
-const nav = [
-  { href: '/history', label: 'Historia', icon: Gauge } ,
-  { href: '/', label: 'Dashboard', icon: Gauge },
-  { href: '/foxess', label: 'FoxESS', icon: SunMedium },
-  { href: '/tuya', label: 'Tuya', icon: Zap },
-  { href: '/prices', label: 'Ceny', icon: Coins },
-];
-
-export default function Sidebar(){
-  const path = usePathname();
+export default function Sidebar() {
   return (
-    <aside className="sidebar">
-      <div className="logo mb-4">
-        <SunMedium size={18}/> <b>Net‑Billing</b>
+    <aside className="hidden lg:flex lg:flex-col lg:gap-2 lg:border-r lg:border-white/10 lg:bg-black/20 lg:backdrop-blur-md">
+      <div className="px-4 py-4">
+        <div className="text-sm text-slate-400">Nawigacja</div>
       </div>
-      <nav>
-        {nav.map(({href,label,icon:Icon}) => (
-          <Link key={href} href={href} className={clsx("nav-item", path===href && "active")}>
-            <Icon size={16}/> <span>{label}</span>
-          </Link>
-        ))}
+      <nav className="px-2 pb-4">
+        <ul className="space-y-1">
+          <li><Link href="/" className="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-200 hover:bg-white/5"><Bolt className="w-4 h-4" /> Pulpit</Link></li>
+          <li><Link href="/foxess" className="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-200 hover:bg-white/5"><Upload className="w-4 h-4" /> FoxESS</Link></li>
+          <li><Link href="/prices" className="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-200 hover:bg-white/5"><PiggyBank className="w-4 h-4" /> Ceny RCE</Link></li>
+          <li><Link href="/tuya" className="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-200 hover:bg-white/5"><Import className="w-4 h-4" /> Tuya</Link></li>
+        </ul>
       </nav>
+      <div className="mt-auto p-4 text-xs text-slate-400/80">© {new Date().getFullYear()} NetBilling</div>
     </aside>
   );
 }
