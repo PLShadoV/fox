@@ -7,6 +7,8 @@ import { RefreshCw, BatteryCharging, ArrowDownLeft, ArrowUpRight, Bolt } from 'l
 
 export default function FoxessPage() {
   const [data, setData] = useState<any>(null);
+  const [connected, setConnected] = useState<boolean>(false);
+  const [expiresAt, setExpiresAt] = useState<string|undefined>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string|undefined>();
 
@@ -20,13 +22,24 @@ export default function FoxessPage() {
     } catch (e:any) { setError(e.message); }
     setLoading(false);
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { (async()=>{ const s = await fetch('/api/foxess/status').then(r=>r.json()); setConnected(!!s.connected); setExpiresAt(s.expiresAt || undefined); })(); load(); }, []);
 
   return (
     <main className="grid gap-4">
       <PageHeader title="FoxESS" subtitle="Dane w czasie rzeczywistym (Cloud API)"
         actions={<button onClick={load} className="btn btn-primary"><RefreshCw size={16}/> Odśwież</button>} />
       <div className="container grid gap-6">
+        {!connected && (
+          <div className="card">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-semibold">Połącz konto FoxESS</div>
+                <div className="text-sm muted">Użyj OAuth, aby bezpiecznie udostępnić dane</div>
+              </div>
+              <a className="btn btn-primary" href="/api/foxess/login">Połącz</a>
+            </div>
+          </div>
+        )}
         {error && <div className="mb-3 px-3 py-2 rounded-xl border border-red-500/40 bg-red-500/10 text-red-200 text-sm">{error}</div>}
         <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Tile title="PV" value={data?.pvPowerW ?? '—'} icon={<Bolt size={18} />} hint="W" />

@@ -7,12 +7,13 @@
  *  - lang: 'en'
  */
 import crypto from "crypto";
+import { getToken } from "@/src/db/oauth";
 
 const BASE = process.env.FOXESS_API_BASE || "https://www.foxesscloud.com";
 const TOKEN = process.env.FOXESS_API_KEY || "";
 const SN = process.env.FOXESS_DEVICE_SN || "";
 
-// Single foxFetch with signature variants to avoid "illegal signature" (errno 40256)
+// foxFetch: try OAuth Bearer first, fallback to private-token signatures
 type Realtime = { pvPowerW: number; gridExportW: number; gridImportW: number; batterySOC?: number; raw?: any };
 
 export async function getFoxRealtime(): Promise<Realtime> {
@@ -97,3 +98,66 @@ async function foxFetch(path: string, method: "GET" | "POST", body?: any) {
   return last;
 }
 
+
+async function foxFetch(path: string, method: "GET" | "POST", body?: any) {
+  const bodyStr = body ? JSON.stringify(body) : "";
+  // 1) Try OAuth bearer if token exists
+  try {
+    const t = await getToken("foxess");
+    if (t?.accessToken) {
+      const res = await fetch(BASE + path, {
+        method,
+        headers: {
+          "Authorization": `Bearer ${t.accessToken}`,
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: bodyStr || undefined,
+        cache: "no-store"
+      });
+      let data: any = null;
+      try { data = await res.json(); } catch { data = await res.text(); }
+      if (res.ok) return data;
+      // if unauthorized, fall through to private token
+    }
+  } catch {}
+
+  // 2) Private token fallback (with signature variants)
+  if (!TOKEN) throw new Error("Brak FOXESS_API_KEY w ENV (fallback private-token)");
+  const bodyHash = crypto.createHash("md5").update(bodyStr).digest("hex");
+  const tsMs = Date.now().toString();
+  const tsSec = Math.floor(Date.now()/1000).toString();
+  const pathVars = Array.from(new Set([path, path.endswith('/') ? path.slice(0,-1) : path + '/', path.replace(/\/+$/,'')]));
+  const timeVars = [tsMs, tsSec];
+  const fmt = (b:Buffer, upper:boolean)=> upper ? b.toString("hex").toUpperCase() : b.toString("hex");
+  const signBases = (p:string, tok:string, t:string) => [
+    `${p}\r\n${tok}\r\n${t}`,
+    `${p}\n${tok}\n${t}`,
+    `${p}${tok}${t}`,
+    `${p}\r\n${tok}\r\n${t}\r\n${bodyHash}`,
+    `${p}\n${tok}\n${t}\n${bodyHash}`,
+  ];
+
+  let last: any = null;
+  for (const p of pathVars) {
+    for (const t of timeVars) {
+      for (const base of signBases(p, TOKEN, t)) {
+        for (const upper of [false, true]) {
+          const sig = fmt(crypto.createHash("md5").update(base).digest(), upper);
+          const headers: Record<string,string> = {
+            "token": TOKEN, "timestamp": t, "signature": sig, "lang": "en",
+            "Content-Type": "application/json", "Accept": "application/json",
+            "Origin":"https://www.foxesscloud.com", "Referer":"https://www.foxesscloud.com/"
+          };
+          const res = await fetch(BASE + p, { method, headers, body: bodyStr || undefined, cache: "no-store" });
+          let data: any = null; try { data = await res.json(); } catch { data = await res.text(); }
+          last = data;
+          if (typeof data === 'object' && (data?.errno === 40256 || data?.msg?.toLowerCase?.().includes('illegal'))) continue;
+          if (!res.ok) throw new Error(`FoxESS HTTP ${res.status}: ${JSON.stringify(data)}`);
+          return data;
+        }
+      }
+    }
+  }
+  return last;
+}
