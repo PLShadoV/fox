@@ -4,7 +4,7 @@ import crypto from 'crypto'
 
 const TZ = 'Europe/Warsaw'
 
-/** Podpis MD5 dla FoxESS: path + "\\r\\n" + token + "\\r\\n" + timestamp (literalne backslashe!) */
+/** Podpis MD5 dla FoxESS: path + "\\r\\n" + token + "\\r\\n" + timestamp (LITERALNE backslashe). */
 function foxHeaders(path: string, tokenRaw: string) {
   const token = (tokenRaw || '').trim()
   const timestamp = Date.now().toString()
@@ -17,7 +17,7 @@ function foxHeaders(path: string, tokenRaw: string) {
     'Accept': 'application/json',
     token,
     timestamp,
-    signature,
+    signature, // wymagany nagłówek
     lang: 'en',
     'User-Agent':
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
