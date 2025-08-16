@@ -1,23 +1,14 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-:root {
-  --bg: #0b1020;
-  --card: #0f152b;
-  --muted: #a7b0c3;
-}
-html, body, #__next { height: 100%; }
-body { background: radial-gradient(1200px 800px at 10% 10%, #111a3a, var(--bg)); color: white; }
-
-.container { @apply max-w-5xl mx-auto px-4; }
-.card { @apply bg-white/5 backdrop-blur-xl rounded-2xl shadow-xl p-6 border border-white/10; }
-.h1 { @apply text-3xl md:text-4xl font-semibold tracking-tight; }
-.sub { @apply text-sm text-slate-300; }
-.stat { @apply text-2xl md:text-3xl font-semibold; }
-.badge { @apply text-xs px-2 py-1 rounded-full bg-white/10 border border-white/10; }
-.btn { @apply inline-flex items-center gap-2 rounded-xl px-4 py-2 border border-white/10 bg-white/10 hover:bg-white/15 transition; }
-.table { @apply w-full text-sm; }
-.table th, .table td { @apply px-3 py-2; }
-.table thead th { @apply text-left text-slate-300; }
-.table tbody tr { @apply border-t border-white/10; }
+@tailwind base; @tailwind components; @tailwind utilities;
+:root { --bg:#0b1020 }
+body { background: radial-gradient(1200px 800px at 10% 10%, #111a3a, var(--bg)); color:#fff }
+.container { max-width: 72rem; margin: 0 auto; padding: 0 1rem }
+.card { background: rgba(255,255,255,.05); backdrop-filter: blur(12px); border:1px solid rgba(255,255,255,.1); border-radius: 1rem; padding: 1.5rem }
+.h1 { font-size: 1.875rem; font-weight: 600 }
+.sub { color: #cbd5e1; font-size: .875rem }
+.stat { font-size: 1.5rem; font-weight: 600 }
+.badge { font-size:.75rem; padding:.25rem .5rem; border-radius:.5rem; background: rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.1) }
+.btn { display:inline-flex; align-items:center; gap:.5rem; border-radius:.75rem; padding:.5rem 1rem; border:1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.1) }
+.table { width:100%; font-size:.875rem }
+.table th,.table td { padding:.5rem .75rem }
+.table thead th { color:#cbd5e1; text-align:left }
+.table tbody tr { border-top:1px solid rgba(255,255,255,.1) }

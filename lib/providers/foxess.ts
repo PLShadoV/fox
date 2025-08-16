@@ -1,36 +1,13 @@
 import { EnergyPoint } from '../types'
-
-// Provider supports modes via env:
-// FOXESS_MODE: 'mock' | 'proxy'
-//  - 'proxy': call a JSON proxy that returns [{ timestamp, exported_kwh }]
-// FOXESS_PROXY_URL: URL of your proxy endpoint
-// FOXESS_DEVICE_SN: your inverter serial number (e.g. 603T253021ND064)
-
 export async function fetchFoxEssHourlyExported(fromISO: string, toISO: string): Promise<EnergyPoint[]> {
   const mode = process.env.FOXESS_MODE ?? 'mock'
-  const sn = process.env.FOXESS_DEVICE_SN
-
-  if (mode === 'proxy') {
-    const base = process.env.FOXESS_PROXY_URL
-    if (!base) throw new Error('Brak FOXESS_PROXY_URL')
-    const url = new URL('/energy/hourly', base)
-    url.searchParams.set('from', fromISO)
-    url.searchParams.set('to', toISO)
-    if (sn) url.searchParams.set('sn', sn)
-
-    const res = await fetch(url.toString(), { next: { revalidate: 300 } })
-    if (!res.ok) throw new Error(`FoxESS proxy failed: ${res.status}`)
-    const data = await res.json()
-    return data as EnergyPoint[]
-  }
-
-  // default mock
-  const start = new Date(fromISO)
-  const rows: EnergyPoint[] = []
-  for (let i = 0; i < 24; i++) {
-    const t = new Date(start)
-    t.setHours(start.getHours() + i)
-    rows.push({ timestamp: t.toISOString(), exported_kwh: +(Math.random() * 2).toFixed(3) })
-  }
+  if (mode === 'proxy') return viaProxy(fromISO, toISO)
+  if (mode === 'json') return viaJson(fromISO, toISO)
+  if (mode === 'cloud') return viaCloud(fromISO, toISO)
+  const start = new Date(fromISO); const rows: EnergyPoint[] = []
+  for (let i=0;i<24;i++){ const t=new Date(start); t.setHours(start.getHours()+i); rows.push({ timestamp: t.toISOString(), exported_kwh: +(Math.random()*2).toFixed(3) }) }
   return rows
 }
+async function viaProxy(fromISO:string,toISO:string){ const base=process.env.FOXESS_PROXY_URL; const sn=process.env.FOXESS_DEVICE_SN??''; if(!base) throw new Error('Brak FOXESS_PROXY_URL'); const url=new URL('/energy/hourly', base); url.searchParams.set('from',fromISO); url.searchParams.set('to',toISO); if(sn) url.searchParams.set('sn',sn); const res=await fetch(url.toString(),{ next:{ revalidate:300 } }); if(!res.ok) throw new Error(`FoxESS proxy failed: ${res.status}`); return await res.json() as EnergyPoint[] }
+async function viaJson(fromISO:string,toISO:string){ const base=process.env.FOXESS_JSON_URL; const sn=process.env.FOXESS_DEVICE_SN??''; if(!base) throw new Error('Brak FOXESS_JSON_URL'); const url=new URL(base); if(!url.searchParams.has('from')) url.searchParams.set('from',fromISO); if(!url.searchParams.has('to')) url.searchParams.set('to',toISO); if(sn && !url.searchParams.has('sn')) url.searchParams.set('sn',sn); const res=await fetch(url.toString(),{ next:{ revalidate:300 } }); if(!res.ok) throw new Error(`FoxESS json failed: ${res.status}`); return await res.json() as EnergyPoint[] }
+async function viaCloud(fromISO:string,toISO:string){ const base=process.env.FOXESS_API_BASE; const token=process.env.FOXESS_API_TOKEN; const sn=process.env.FOXESS_DEVICE_SN??''; const path=process.env.FOXESS_API_PATH??'/energy/hourly'; const method=(process.env.FOXESS_API_METHOD??'GET').toUpperCase(); if(!base||!token) throw new Error('Brak FOXESS_API_BASE lub FOXESS_API_TOKEN'); const url=new URL(path,base); url.searchParams.set('from',fromISO); url.searchParams.set('to',toISO); if(sn) url.searchParams.set('sn',sn); const init:RequestInit={ method, headers:{ 'Authorization':`Bearer ${token}`, 'Content-Type':'application/json' }, next:{ revalidate:300 } }; if(method==='POST'){ delete (init as any).next; init.body=JSON.stringify({ from:fromISO, to:toISO, sn }) } const res=await fetch(url.toString(), init); const text=await res.text(); if(!res.ok) throw new Error(`FoxESS cloud failed: ${res.status} ${text}`); try{ const raw=JSON.parse(text); if(Array.isArray(raw)&&raw.length&&'timestamp'in raw[0]&&'exported_kwh'in raw[0]) return raw as EnergyPoint[]; if(raw?.data&&Array.isArray(raw.data)) return raw.data.map((r:any)=>({ timestamp:r.timestamp??r.time??r.datetime, exported_kwh:Number(r.exported_kwh??r.export??r.kwh??0) })) as EnergyPoint[]; throw new Error('Nieznany format odpowiedzi z API – dostosuj mapping w lib/providers/foxess.ts') }catch(e:any){ throw new Error(`Błąd parsowania odpowiedzi API: ${e.message}`) } }

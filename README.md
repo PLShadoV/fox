@@ -1,75 +1,49 @@
-# FoxESS × RCE — Revenue Dashboard
+# FoxESS × RCE — Revenue Dashboard (final)
 
-Minimalny szablon do wdrożenia na **Vercel**. Łączy produkcję z FoxESS i ceny RCE, liczy przychód: (Σ export_kWh × price_PLN).
-
-## Szybki start
-
-1. Sklonuj repo i zainstaluj zależności: `npm i`
-2. Skopiuj env: `cp .env.example .env.local`
-3. `npm run dev` → http://localhost:3000
-
-## Wdróż na Vercel
-
-- Podepnij repo z GitHub do Vercel → *New Project*
-- Ustaw **Environment Variables** z `.env.example`
-- Deploy (klucze pozostają po stronie serwera)
-
-## Integracja z RCE (PSE)
-
-Aplikacja ma trasę **`/api/rce/pse`**, która pobiera dzienny CSV z `raporty.pse.pl/report/rce-pln` i zwraca JSON:
-```json
-[{ "timestamp": "2025-08-16T10:00:00Z", "price_pln_per_kwh": 0.5523 }]
+## Start lokalnie
+```bash
+npm i
+cp .env.example .env.local
+npm run dev
+# http://localhost:3000
 ```
-> PSE publikuje raporty dzienne. Dla zakresów wielodniowych na start pobieramy **dzień = data `from`**. (TODO: batching per dzień przy dłuższych zakresach).
 
-## Integracja z FoxESS (falownik)
-
-Tryb **proxy** ukrywa sekrety i normalizuje dane. W `.env.local`:
+## Konfiguracja FoxESS (wybierz tryb)
+- JSON (masz endpoint zwracający [{timestamp, exported_kwh}]):
+```
+FOXESS_MODE=json
+FOXESS_JSON_URL=https://twoj-api.example.com/energy/hourly?sn=TWÓJ_SN
+FOXESS_DEVICE_SN=TWÓJ_SN
+```
+- CLOUD (bezpośrednio do Twojego API z tokenem, server-side):
+```
+FOXESS_MODE=cloud
+FOXESS_API_BASE=https://twoj-api.example.com
+FOXESS_API_TOKEN=sekretny_token
+FOXESS_DEVICE_SN=TWÓJ_SN
+FOXESS_API_PATH=/energy/hourly
+FOXESS_API_METHOD=GET
+```
+- PROXY (opcjonalny worker):
 ```
 FOXESS_MODE=proxy
-FOXESS_PROXY_URL=https://twoj-proxy.domena.com
-FOXESS_DEVICE_SN=603T253021ND064
-NEXT_PUBLIC_BASE_URL=http://localhost:3000
+FOXESS_PROXY_URL=https://twoj-worker.workers.dev
+FOXESS_DEVICE_SN=TWÓJ_SN
 ```
-Proxy powinno zwracać *godzinną* energię oddaną w formacie:
-```json
-[{ "timestamp": "2025-08-16T10:00:00Z", "exported_kwh": 1.234 }]
+- MOCK (do podglądu UI):
 ```
-
-### Przykładowy Cloudflare Worker (szkielet)
-Plik: `proxy/foxess-worker.js`
-```js
-export default {
-  async fetch(req, env) {
-    const url = new URL(req.url)
-    if (url.pathname === '/energy/hourly') {
-      const from = url.searchParams.get('from')
-      const to = url.searchParams.get('to')
-      const sn = url.searchParams.get('sn')
-      // TODO: pobierz realne dane z FoxESS Cloud dla SN w zakresie [from,to]
-      // Zastępczo zwróć 24h przykładowych danych w poprawnym formacie:
-      const start = new Date(from)
-      const rows = []
-      for (let i=0;i<24;i++){ const t=new Date(start); t.setHours(start.getHours()+i); rows.push({ timestamp: t.toISOString(), exported_kwh: Math.round(Math.random()*2000)/1000 }) }
-      return new Response(JSON.stringify(rows), { headers: { 'content-type': 'application/json' } })
-    }
-    return new Response('Not found', { status: 404 })
-  }
-}
+FOXESS_MODE=mock
 ```
 
-## Wykresy i agregacje
+## RCE (PSE)
+Backend `/api/rce/pse` pobiera dzienny CSV z raporty.pse.pl i zwraca JSON `{timestamp, price_pln_per_kwh}`.
 
-- Zakładki: **Godziny / Dni / Tygodnie / Miesiące / Lata**
-- Agregacja ważona po kWh (średnia cena = średnia ważona) i suma przychodów
-- Wykresy: **Przychód [PLN]** i **Energia [kWh]**
-- **Szybkie zakresy**: Dziś, Wczoraj, Ten/Poprzedni tydzień, Ten/Poprzedni miesiąc, Ten rok
+## Deploy na Vercel
+Ustaw w **Environment Variables** (Production/Preview):
+- `NEXT_PUBLIC_BASE_URL=https://twoja-domena-vercel.app`
+- `FOXESS_MODE` i wymagane zmienne wg wybranego trybu
+- `FOXESS_DEVICE_SN`
 
-## Roadmap
-
-- Batchowanie wielu dni z PSE (automatycznie)
-- Eksport CSV/XLSX
-- Presety: ostatnie 7/30/365 dni
-- Auth (NextAuth) i multi-site
-- Persistencja (Vercel Postgres / Turso)
-- Parametry net-billing (opłaty, prowizje, magazyn)
+## Użycie
+W aplikacji wybierz **Szybkie zakresy** (np. Wczoraj) → **Odśwież**.
+Zobaczysz sumy, wykresy (przychód i kWh) oraz tabelę godzinową.

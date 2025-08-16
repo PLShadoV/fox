@@ -4,7 +4,7 @@ import Header from '@/components/Header'
 
 export const metadata: Metadata = {
   title: 'FoxESS × RCE — Revenue Dashboard',
-  description: 'Compute net-billing revenue from FoxESS production and hourly RCE prices.'
+  description: 'Net-billing revenue from FoxESS + RCE.'
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

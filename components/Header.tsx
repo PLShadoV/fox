@@ -1,6 +1,5 @@
 'use client'
 import Image from 'next/image'
-import Link from 'next/link'
 
 export default function Header() {
   return (
@@ -12,10 +11,7 @@ export default function Header() {
           <p className="sub">Dashboard przychodów z net-billingu</p>
         </div>
       </div>
-      <nav className="flex items-center gap-2">
-        <Link className="btn" href="https://vercel.com/new">Deploy</Link>
-        <a className="btn" href="https://github.com/new" target="_blank" rel="noreferrer">GitHub</a>
-      </nav>
+      <div />
     </header>
   )
 }
