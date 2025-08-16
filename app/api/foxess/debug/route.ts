@@ -28,16 +28,12 @@ async function call(url: URL, pathForSignature: string, token: string, variant: 
     'lang': 'en',
     'token': token.trim(),
     'timestamp': ts,
-    'sign': sig, // ← kluczowe: "sign"
+    'signature': sig, // ← wracamy do "signature"
   }
   const res = await fetch(url.toString(), { headers, method: 'GET' })
   const text = await res.text()
   let body: any = null
-  try {
-    body = JSON.parse(text)
-  } catch {
-    body = text.slice(0, 400)
-  }
+  try { body = JSON.parse(text) } catch { body = text.slice(0, 400) }
   return {
     name: variant,
     status: res.status,
@@ -58,16 +54,12 @@ async function post(url: URL, pathForSignature: string, token: string, variant: 
     'lang': 'en',
     'token': token.trim(),
     'timestamp': ts,
-    'sign': sig, // ← kluczowe: "sign"
+    'signature': sig, // ← wracamy do "signature"
   }
   const res = await fetch(url.toString(), { headers, method: 'POST', body: JSON.stringify(json) })
   const text = await res.text()
   let body: any = null
-  try {
-    body = JSON.parse(text)
-  } catch {
-    body = text.slice(0, 400)
-  }
+  try { body = JSON.parse(text) } catch { body = text.slice(0, 400) }
   return {
     name: variant,
     status: res.status,
