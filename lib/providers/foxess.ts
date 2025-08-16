@@ -1,13 +1,91 @@
+// lib/providers/foxess.ts
 import { EnergyPoint } from '../types'
+import crypto from 'crypto'
+
+function md5(s: string) {
+  return crypto.createHash('md5').update(s).digest('hex')
+}
+function foxHeaders(path: string, token: string) {
+  const timestamp = Date.now().toString()
+  const signature = md5(`${path}\r\n${token}\r\n${timestamp}`)
+  return {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'token': token,
+    'timestamp': timestamp,
+    'signature': signature,
+    'lang': 'en',
+    'User-Agent': 'foxess-rce-dashboard/1.0'
+  }
+}
+
+async function viaFoxCloud(fromISO: string): Promise<EnergyPoint[]> {
+  const base = process.env.FOXESS_API_BASE!
+  const token = process.env.FOXESS_API_TOKEN!
+  const sn = process.env.FOXESS_DEVICE_SN!
+  const path = '/op/v0/device/report/query'
+
+  // bierzemy dzień z parametru `from` (tak jak w /api/rce/pse)
+  const d = new Date(fromISO)
+  const y = d.getUTCFullYear()
+  const m = d.getUTCMonth() + 1
+  const day = d.getUTCDate()
+
+  const url = new URL(path, base)
+  const body = {
+    sn,
+    year: y,
+    month: m,
+    day,
+    dimension: 'day',               // zwraca godzinowe wartości dla danego dnia
+    variables: ['feedin']           // energia oddana [kWh]
+  }
+
+  const res = await fetch(url.toString(), {
+    method: 'POST',
+    headers: foxHeaders(path, token),
+    body: JSON.stringify(body),
+    next: { revalidate: 300 }
+  })
+
+  // czytelne błędy, jeśli API zwróci HTML/redirect itp.
+  const ct = res.headers.get('content-type') || ''
+  const text = await res.text()
+  if (!res.ok) throw new Error(`FoxESS HTTP ${res.status} — ${text.slice(0, 200)}`)
+  if (!ct.includes('application/json')) {
+    throw new Error(`FoxESS zwrócił ${ct || 'brak content-type'} (czy to strona logowania?). Fragment: ${text.slice(0, 200)}`)
+  }
+
+  const json = JSON.parse(text)
+  const series = json?.result?.find((v: any) => v.variable === 'feedin')?.values ?? []
+  const out: EnergyPoint[] = []
+  for (let h = 0; h < 24; h++) {
+    const val = Number(series[h] ?? 0)
+    // znacznik czasu budujemy jako UTC godzina po godzinie
+    const ts = new Date(Date.UTC(y, m - 1, day, h)).toISOString()
+    out.push({ timestamp: ts, exported_kwh: val })
+  }
+  return out
+}
+
 export async function fetchFoxEssHourlyExported(fromISO: string, toISO: string): Promise<EnergyPoint[]> {
   const mode = process.env.FOXESS_MODE ?? 'mock'
-  if (mode === 'proxy') return viaProxy(fromISO, toISO)
-  if (mode === 'json') return viaJson(fromISO, toISO)
-  if (mode === 'cloud') return viaCloud(fromISO, toISO)
-  const start = new Date(fromISO); const rows: EnergyPoint[] = []
-  for (let i=0;i<24;i++){ const t=new Date(start); t.setHours(start.getHours()+i); rows.push({ timestamp: t.toISOString(), exported_kwh: +(Math.random()*2).toFixed(3) }) }
+  if (mode === 'cloud') {
+    // gdy base wskazuje na FoxESS Cloud – użyj ich schematu nagłówków + report/query
+    if ((process.env.FOXESS_API_BASE || '').includes('foxesscloud.com')) {
+      return viaFoxCloud(fromISO)
+    }
+    // ...tu może zostać Twój wcześniejszy „generyczny” cloud (Bearer itd.)
+    throw new Error('Skonfiguruj FOXESS_API_BASE na https://www.foxesscloud.com lub włącz tryb json/proxy/mock')
+  }
+
+  // inne tryby (json/proxy/mock) jak wcześniej…
+  // (zostaw bez zmian jeśli już masz)
+  const start = new Date(fromISO)
+  const rows: EnergyPoint[] = []
+  for (let i = 0; i < 24; i++) {
+    const t = new Date(start); t.setHours(start.getHours() + i)
+    rows.push({ timestamp: t.toISOString(), exported_kwh: +(Math.random() * 2).toFixed(3) })
+  }
   return rows
 }
-async function viaProxy(fromISO:string,toISO:string){ const base=process.env.FOXESS_PROXY_URL; const sn=process.env.FOXESS_DEVICE_SN??''; if(!base) throw new Error('Brak FOXESS_PROXY_URL'); const url=new URL('/energy/hourly', base); url.searchParams.set('from',fromISO); url.searchParams.set('to',toISO); if(sn) url.searchParams.set('sn',sn); const res=await fetch(url.toString(),{ next:{ revalidate:300 } }); if(!res.ok) throw new Error(`FoxESS proxy failed: ${res.status}`); return await res.json() as EnergyPoint[] }
-async function viaJson(fromISO:string,toISO:string){ const base=process.env.FOXESS_JSON_URL; const sn=process.env.FOXESS_DEVICE_SN??''; if(!base) throw new Error('Brak FOXESS_JSON_URL'); const url=new URL(base); if(!url.searchParams.has('from')) url.searchParams.set('from',fromISO); if(!url.searchParams.has('to')) url.searchParams.set('to',toISO); if(sn && !url.searchParams.has('sn')) url.searchParams.set('sn',sn); const res=await fetch(url.toString(),{ next:{ revalidate:300 } }); if(!res.ok) throw new Error(`FoxESS json failed: ${res.status}`); return await res.json() as EnergyPoint[] }
-async function viaCloud(fromISO:string,toISO:string){ const base=process.env.FOXESS_API_BASE; const token=process.env.FOXESS_API_TOKEN; const sn=process.env.FOXESS_DEVICE_SN??''; const path=process.env.FOXESS_API_PATH??'/energy/hourly'; const method=(process.env.FOXESS_API_METHOD??'GET').toUpperCase(); if(!base||!token) throw new Error('Brak FOXESS_API_BASE lub FOXESS_API_TOKEN'); const url=new URL(path,base); url.searchParams.set('from',fromISO); url.searchParams.set('to',toISO); if(sn) url.searchParams.set('sn',sn); const init:RequestInit={ method, headers:{ 'Authorization':`Bearer ${token}`, 'Content-Type':'application/json' }, next:{ revalidate:300 } }; if(method==='POST'){ delete (init as any).next; init.body=JSON.stringify({ from:fromISO, to:toISO, sn }) } const res=await fetch(url.toString(), init); const text=await res.text(); if(!res.ok) throw new Error(`FoxESS cloud failed: ${res.status} ${text}`); try{ const raw=JSON.parse(text); if(Array.isArray(raw)&&raw.length&&'timestamp'in raw[0]&&'exported_kwh'in raw[0]) return raw as EnergyPoint[]; if(raw?.data&&Array.isArray(raw.data)) return raw.data.map((r:any)=>({ timestamp:r.timestamp??r.time??r.datetime, exported_kwh:Number(r.exported_kwh??r.export??r.kwh??0) })) as EnergyPoint[]; throw new Error('Nieznany format odpowiedzi z API – dostosuj mapping w lib/providers/foxess.ts') }catch(e:any){ throw new Error(`Błąd parsowania odpowiedzi API: ${e.message}`) } }
