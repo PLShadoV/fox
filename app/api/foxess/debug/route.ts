@@ -11,7 +11,7 @@ function makeSig(path: string, tokenRaw: string, variant: SigVariant) {
   const token = (tokenRaw || '').trim()
   const ts = Date.now().toString()
   const join = variant.includes('LF') && !variant.includes('CRLF') ? '\n' : '\r\n'
-  const pathToUse = variant.endsWith('+QUERY') ? path : path // placeholder, we pass the full path incl. query when needed
+  const pathToUse = variant.endsWith('+QUERY') ? path : path
   const toSign = `${pathToUse}${join}${token}${join}${ts}`
   let sig = crypto.createHash('md5').update(toSign).digest('hex')
   if (variant.includes('UPPER')) sig = sig.toUpperCase()
@@ -23,23 +23,28 @@ async function call(url: URL, pathForSignature: string, token: string, variant: 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
     'lang': 'en',
     'token': token.trim(),
     'timestamp': ts,
-    'signature': sig,
+    'sign': sig, // ← kluczowe: "sign"
   }
   const res = await fetch(url.toString(), { headers, method: 'GET' })
   const text = await res.text()
   let body: any = null
-  try { body = JSON.parse(text) } catch { body = text.slice(0, 400) }
+  try {
+    body = JSON.parse(text)
+  } catch {
+    body = text.slice(0, 400)
+  }
   return {
     name: variant,
     status: res.status,
     ct: res.headers.get('content-type') || '',
     errno: typeof body?.errno === 'number' ? body.errno : undefined,
     msg: body?.msg,
-    preview: typeof body === 'string' ? body : JSON.stringify(body).slice(0, 200)
+    preview: typeof body === 'string' ? body : JSON.stringify(body).slice(0, 200),
   }
 }
 
@@ -48,23 +53,28 @@ async function post(url: URL, pathForSignature: string, token: string, variant: 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
     'lang': 'en',
     'token': token.trim(),
     'timestamp': ts,
-    'signature': sig,
+    'sign': sig, // ← kluczowe: "sign"
   }
   const res = await fetch(url.toString(), { headers, method: 'POST', body: JSON.stringify(json) })
   const text = await res.text()
   let body: any = null
-  try { body = JSON.parse(text) } catch { body = text.slice(0, 400) }
+  try {
+    body = JSON.parse(text)
+  } catch {
+    body = text.slice(0, 400)
+  }
   return {
     name: variant,
     status: res.status,
     ct: res.headers.get('content-type') || '',
     errno: typeof body?.errno === 'number' ? body.errno : undefined,
     msg: body?.msg,
-    preview: typeof body === 'string' ? body : JSON.stringify(body).slice(0, 200)
+    preview: typeof body === 'string' ? body : JSON.stringify(body).slice(0, 200),
   }
 }
 
@@ -81,29 +91,45 @@ export async function GET(req: NextRequest) {
 
   const reportUrl = new URL(reportPath, base)
   const today = new Date()
-  const body = { sn, year: today.getUTCFullYear(), month: today.getUTCMonth() + 1, day: today.getUTCDate(), dimension: 'day', variables: ['feedin'] }
+  const body = {
+    sn,
+    year: today.getUTCFullYear(),
+    month: today.getUTCMonth() + 1,
+    day: today.getUTCDate(),
+    dimension: 'day',
+    variables: ['feedin'],
+  }
 
   const variants: SigVariant[] = ['CRLF+lower', 'LF+lower', 'CRLF+UPPER', 'CRLF+lower+QUERY']
 
-  const detailResults = await Promise.all(variants.map(v => {
-    const signPath = v.endsWith('+QUERY') ? `${detailPath}?sn=${encodeURIComponent(sn)}` : detailPath
-    return call(detailUrl, signPath, token, v)
-  }))
+  const detailResults = await Promise.all(
+    variants.map((v) => {
+      const signPath = v.endsWith('+QUERY') ? `${detailPath}?sn=${encodeURIComponent(sn)}` : detailPath
+      return call(detailUrl, signPath, token, v)
+    })
+  )
 
-  const reportResults = await Promise.all(variants.map(v => {
-    // report has no query params – test variants except +QUERY (will be same as CRLF+lower)
-    const signPath = reportPath
-    return post(reportUrl, signPath, token, v, body)
-  }))
+  const reportResults = await Promise.all(
+    variants.map((v) => {
+      const signPath = reportPath
+      return post(reportUrl, signPath, token, v, body)
+    })
+  )
 
-  // mask token for display
   const maskedToken = token ? `${token.slice(0, 4)}...${token.slice(-4)} (${token.length} chars)` : ''
 
-  return new Response(JSON.stringify({
-    env: { base, hasToken: !!token, sn },
-    tokenPreview: maskedToken,
-    ua: 'Mozilla/5.0 ... Chrome/117 Safari/537.36',
-    detail: detailResults,
-    report: reportResults
-  }, null, 2), { headers: { 'content-type': 'application/json' } })
+  return new Response(
+    JSON.stringify(
+      {
+        env: { base, hasToken: !!token, sn },
+        tokenPreview: maskedToken,
+        ua: 'Mozilla/5.0 ... Chrome/117 Safari/537.36',
+        detail: detailResults,
+        report: reportResults,
+      },
+      null,
+      2
+    ),
+    { headers: { 'content-type': 'application/json' } }
+  )
 }

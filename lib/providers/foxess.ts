@@ -6,21 +6,21 @@ const TZ = 'Europe/Warsaw'
 
 /**
  * FoxESS wymaga podpisu: MD5( path + "\r\n" + token + "\r\n" + timestamp )
- * Uwaga: to muszą być prawdziwe CRLF (nie "\\r\\n").
+ * Uwaga: prawdziwe CRLF (nie "\\r\\n"). Nagłówek nazywa się "sign".
  * Dodatkowo: przycinamy token (trim) i używamy "browser-like" User-Agent.
  */
 function foxHeaders(path: string, tokenRaw: string) {
   const token = (tokenRaw || '').trim()
   const timestamp = Date.now().toString()
   const toSign = `${path}\r\n${token}\r\n${timestamp}` // ← prawdziwe CRLF
-  const signature = crypto.createHash('md5').update(toSign).digest('hex') // lower-case
+  const sign = crypto.createHash('md5').update(toSign).digest('hex') // lower-case
 
   return {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
     token,
     timestamp,
-    signature,
+    sign, // ← kluczowe
     lang: 'en',
     // UA jak w przykładach – część instalacji FoxESS jest na to czuła
     'User-Agent':
@@ -205,7 +205,7 @@ export async function fetchFoxEssHourlyExported(fromISO: string, toISO: string):
   if (mode === 'json') return viaJson(fromISO, toISO)
 
   if (mode === 'cloud') {
-    // Oficjalny FoxESS Cloud – podpis MD5 (token/timestamp/signature/lang)
+    // Oficjalny FoxESS Cloud – podpis MD5 (token/timestamp/sign/lang)
     if ((process.env.FOXESS_API_BASE || '').includes('foxesscloud.com')) {
       return viaFoxCloud(fromISO)
     }
