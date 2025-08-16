@@ -5,21 +5,18 @@ import crypto from 'crypto'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function sign(path: string, token: string) {
-  const timestamp = Date.now().toString()
-  const signature = crypto.createHash('md5').update(`${path}\r\n${token}\r\n${timestamp}`).digest('hex')
-  return { timestamp, signature }
-}
-
 function foxHeaders(path: string, token: string) {
-  const { timestamp, signature } = sign(path, token)
+  const timestamp = Date.now().toString()
+  // ⬅️ WAŻNE: prawdziwe \r\n (CRLF), NIE \\r\\n
+  const toSign = `${path}\r\n${token}\r\n${timestamp}`
+  const signature = crypto.createHash('md5').update(toSign).digest('hex')
   return {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
-    'token': token,
-    'timestamp': timestamp,
-    'signature': signature,
-    'lang': 'en',
+    token,
+    timestamp,
+    signature,
+    lang: 'en',
     'User-Agent': 'foxess-rce-dashboard/1.0'
   }
 }
@@ -39,14 +36,18 @@ export async function GET(req: NextRequest) {
   const detailPath = '/op/v0/device/detail'
   const reportPath = '/op/v0/device/report/query'
 
-  const detailUrl = sn ? `${detailPath}?sn=${encodeURIComponent(sn)}` : detailPath
-  const detail = await call(base, detailUrl, { headers: foxHeaders(detailPath, token) })
+  const detail = await call(base, sn ? `${detailPath}?sn=${encodeURIComponent(sn)}` : detailPath,
+    { headers: foxHeaders(detailPath, token) })
 
   const today = new Date()
-  const y = today.getUTCFullYear()
-  const m = today.getUTCMonth() + 1
-  const d = today.getUTCDate()
-  const body = JSON.stringify({ sn, year: y, month: m, day: d, dimension: 'day', variables: ['feedin'] })
+  const body = JSON.stringify({
+    sn,
+    year: today.getUTCFullYear(),
+    month: today.getUTCMonth() + 1,
+    day: today.getUTCDate(),
+    dimension: 'day',
+    variables: ['feedin']
+  })
 
   const report = await call(base, reportPath, {
     method: 'POST',
