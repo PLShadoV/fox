@@ -5,44 +5,45 @@ import QuickRanges from '@/components/QuickRanges'
 import TimeChart from '@/components/TimeChart'
 
 type Row = {
-  ts: string          // ISO
-  kwh: number         // oddane kWh (godz.)
-  price?: number      // PLN/kWh z RCE
-  revenue?: number    // PLN dla godziny
+  ts: string   // ISO
+  kwh: number  // oddane kWh (godz.)
+  price?: number
+  revenue?: number
 }
 
 export default function Page() {
   const [range, setRange] = useState<{ from: string; to: string }>(() => {
+    // start i koniec DZISIAJ wg czasu lokalnego -> wysyłamy .toISOString() (bez ręcznego offsetu)
     const now = new Date()
     const from = new Date(now); from.setHours(0, 0, 0, 0)
     const to = new Date(now);   to.setHours(23, 59, 59, 999)
-    return { from: toLocalISO(from), to: toLocalISO(to) }
+    return { from: from.toISOString(), to: to.toISOString() }
   })
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(false)
   const [live, setLive] = useState<{ pv_w: number; feedin_w: number } | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   // 👉 AUTO-FETCH po zmianie zakresu
   useEffect(() => {
     let ignore = false
     async function load() {
-      setLoading(true)
+      setLoading(true); setError(null)
       try {
-        // ⬇️ Jeżeli masz inny endpoint, podmień tu ścieżkę:
         const res = await fetch(`/api/data?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`, { cache: 'no-store' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const json = await res.json()
         if (!ignore) {
           const list: Row[] = (json.rows ?? json.data ?? []).map((r: any) => ({
             ts: r.ts ?? r.timestamp,
             kwh: Number(r.kwh ?? r.exported_kwh ?? 0),
-            price: r.price ?? r.rce_pln ?? 0,
-            revenue: r.revenue ?? r.income ?? (Number(r.kwh ?? 0) * Number(r.price ?? 0)),
+            price: Number(r.price ?? r.rce_pln ?? 0),
+            revenue: Number(r.revenue ?? r.income ?? (Number(r.kwh ?? r.exported_kwh ?? 0) * Number(r.price ?? r.rce_pln ?? 0))),
           }))
           setRows(list)
         }
-      } catch (e) {
-        console.error(e)
-        if (!ignore) setRows([])
+      } catch (e: any) {
+        if (!ignore) { setRows([]); setError(e?.message || 'Błąd pobierania danych') }
       } finally {
         if (!ignore) setLoading(false)
       }
@@ -51,7 +52,7 @@ export default function Page() {
     return () => { ignore = true }
   }, [range.from, range.to])
 
-  // Polling LIVE (obecna moc)
+  // Polling LIVE
   useEffect(() => {
     let stop = false
     async function tick() {
@@ -66,53 +67,37 @@ export default function Page() {
     return () => { stop = true }
   }, [])
 
-  // Suma zakresu
-  const totals = useMemo(() => {
-    return {
-      kwh: rows.reduce((s, r) => s + (Number(r.kwh) || 0), 0),
-      revenue: rows.reduce((s, r) => s + (Number(r.revenue) || 0), 0),
-    }
-  }, [rows])
+  const totals = useMemo(() => ({
+    kwh: rows.reduce((s, r) => s + (Number(r.kwh) || 0), 0),
+    revenue: rows.reduce((s, r) => s + (Number(r.revenue) || 0), 0),
+  }), [rows])
 
-  // „Dziś do tej pory” – sumujemy zakończone godziny dzisiejszego dnia
   const todaySoFar = useMemo(() => {
     const now = new Date()
     const todayStr = now.toLocaleDateString('pl-PL')
     const cutHour = now.getHours()
-    const sum = rows.reduce((s, r) => {
+    return rows.reduce((s, r) => {
       const d = new Date(r.ts)
-      const sameDay = d.toLocaleDateString('pl-PL') === todayStr
-      if (!sameDay) return s
-      const hr = d.getHours()
-      return s + (hr < cutHour ? (Number(r.kwh) || 0) : 0)
+      if (d.toLocaleDateString('pl-PL') !== todayStr) return s
+      return s + (d.getHours() < cutHour ? (Number(r.kwh) || 0) : 0)
     }, 0)
-    return sum
   }, [rows])
 
   return (
     <main className="p-4 md:p-6 space-y-6">
-      {/* Kafelki podsumowania */}
+      {/* Kafelki */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card title="Oddane kWh (zakres)">
-          <Big>{fmt(totals.kwh, 1)} kWh</Big>
-        </Card>
-        <Card title="Przychód (RCE)">
-          <Big>{fmt(totals.revenue, 2)} zł</Big>
-        </Card>
-        <Card title="Obecna moc (PV)">
-          <Big>{live ? `${Math.round(live.pv_w).toLocaleString('pl-PL')} W` : '—'}</Big>
-        </Card>
-        <Card title="Dziś do tej pory">
-          <Big>{fmt(todaySoFar, 2)} kWh</Big>
-        </Card>
+        <Card title="Oddane kWh (zakres)"><Big>{fmt(totals.kwh, 1)} kWh</Big></Card>
+        <Card title="Przychód (RCE)"><Big>{fmt(totals.revenue, 2)} zł</Big></Card>
+        <Card title="Obecna moc (PV)"><Big>{live ? `${Math.round(live.pv_w).toLocaleString('pl-PL')} W` : '—'}</Big></Card>
+        <Card title="Dziś do tej pory"><Big>{fmt(todaySoFar, 2)} kWh</Big></Card>
       </div>
 
-      {/* Szybkie zakresy – bez przycisku Odśwież */}
+      {/* Presety zakresów */}
       <QuickRanges value={range} onChange={setRange} className="mb-2" />
 
-      {/* Tabela (w miejscu starego „wykresu przychodów”) */}
+      {/* Tabela z kontrolkami dat */}
       <div className="rounded-2xl bg-slate-900/40 p-4 shadow">
-        {/* Kontrolki dat przy tabeli */}
         <div className="flex flex-wrap items-end gap-3 mb-3">
           <div>
             <label className="block text-sm opacity-80 mb-1">Od</label>
@@ -137,12 +122,7 @@ export default function Page() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-left opacity-80">
-              <tr>
-                <th className="py-2">Godzina</th>
-                <th className="py-2 text-right">kWh</th>
-                <th className="py-2 text-right">Cena (PLN/kWh)</th>
-                <th className="py-2 text-right">Przychód (PLN)</th>
-              </tr>
+              <tr><th className="py-2">Godzina</th><th className="py-2 text-right">kWh</th><th className="py-2 text-right">Cena (PLN/kWh)</th><th className="py-2 text-right">Przychód (PLN)</th></tr>
             </thead>
             <tbody>
               {rows.map((r, i) => (
@@ -166,47 +146,30 @@ export default function Page() {
         </div>
 
         {loading && <div className="opacity-70 mt-3">Ładowanie…</div>}
+        {error && <div className="text-red-400 mt-2">Błąd: {error}</div>}
       </div>
 
-      {/* Zostawiamy jeden wykres – energii (kWh) */}
+      {/* Wykres kWh */}
       <TimeChart data={rows.map(r => ({ ts: r.ts, kwh: Number(r.kwh || 0) }))} />
     </main>
   )
 }
 
 /* ————— helpers ————— */
-
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-2xl bg-slate-900/40 p-4 shadow">
-      <div className="opacity-80 text-sm">{title}</div>
-      {children}
-    </div>
-  )
+  return <div className="rounded-2xl bg-slate-900/40 p-4 shadow"><div className="opacity-80 text-sm">{title}</div>{children}</div>
 }
 function Big({ children }: { children: React.ReactNode }) {
   return <div className="text-3xl font-semibold mt-1">{children}</div>
 }
-
-function fmt(n: number, frac = 2) {
-  return (n ?? 0).toLocaleString('pl-PL', { maximumFractionDigits: frac })
-}
-function fmtHour(ts: string) {
-  const d = new Date(ts)
-  return d.toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
-function toLocalISO(d: Date) {
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString()
-}
+function fmt(n: number, frac = 2) { return (n ?? 0).toLocaleString('pl-PL', { maximumFractionDigits: frac }) }
+function fmtHour(ts: string) { return new Date(ts).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) }
 function toLocalInput(iso: string) {
   const d = new Date(iso)
   const pad = (x: number) => String(x).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
-    d.getMinutes()
-  )}`
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
-function fromLocalInput(v: string) {
-  // traktujemy input jako lokalny czas
-  const d = new Date(v)
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString()
+function fromLocalInput(localValue: string) {
+  // ✅ tu też: Date interpretuje string jako „czas lokalny” – samo .toISOString() wystarczy
+  return new Date(localValue).toISOString()
 }
