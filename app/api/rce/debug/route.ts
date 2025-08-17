@@ -1,45 +1,83 @@
 // app/api/rce/debug/route.ts
 import { NextRequest } from 'next/server'
+import { __rce_internal } from '@/lib/providers/rce'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const API_BASE = process.env.RCE_API_BASE?.trim() || 'https://api.raporty.pse.pl/api'
-
-function ymd(d = new Date()) {
-  // domyślnie dziś w PL; pozwalamy też na ?day=YYYY-MM-DD
-  const tz = 'Europe/Warsaw'
-  const p = new Intl.DateTimeFormat('en-GB', {
-    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(d)
-  const get = (t: string) => p.find(x => x.type === t)!.value
-  return `${get('year')}-${get('month')}-${get('day')}`
-}
-
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
-  const day = (searchParams.get('day') || ymd()).trim()
+  const day = (searchParams.get('day') || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return new Response(JSON.stringify({ ok: false, error: "Podaj ?day=YYYY-MM-DD" }, null, 2), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
 
-  const params = new URLSearchParams()
-  params.set('$select', 'period_utc,rce_pln')
-  params.set('$orderby', 'period_utc asc')
-  params.set('$top', '500')
-  params.set('$filter', `udtczas ge '${day} 00:00' and udtczas le '${day} 23:59'`)
+  const v2urls = __rce_internal.buildV2DayUrls(day)
+  const v1urls = __rce_internal.buildV1DayUrls(day)
+  const bulk = __rce_internal.buildBulkUrls()
 
-  const url = `${API_BASE}/rce-pln?${params.toString()}`
-  const res = await fetch(url, { headers: { Accept: 'application/json' }, next: { revalidate: 0 } })
-  const http = res.status
-  let json: any = null
-  try { json = await res.json() } catch { json = null }
+  const tried: any[] = []
+  // v2
+  for (const url of v2urls) {
+    const r = await fetch(url, { headers: { accept: 'application/json' }})
+    const http = r.status
+    let count = 0
+    try {
+      const j = await r.json()
+      count = Array.isArray(j?.value) ? j.value.length : 0
+    } catch { /* ignore */ }
+    tried.push({ api: 'v2', url, ok: r.ok, http, count })
+    if (count) break
+  }
+  // v1 (jeśli v2 puste)
+  if (!tried.some(t => t.api === 'v2' && t.count > 0)) {
+    for (const url of v1urls) {
+      const r = await fetch(url, { headers: { accept: 'application/json' }})
+      const http = r.status
+      let count = 0
+      try {
+        const j = await r.json()
+        count = Array.isArray(j?.value) ? j.value.length : 0
+      } catch { /* ignore */ }
+      tried.push({ api: 'v1', url, ok: r.ok, http, count })
+      if (count) break
+    }
+  }
+  // bulk (jeśli nadal pusto)
+  if (!tried.some(t => t.count > 0)) {
+    for (const url of bulk) {
+      const r = await fetch(url, { headers: { accept: 'application/json' }})
+      const http = r.status
+      let count = 0
+      try {
+        const j = await r.json()
+        count = Array.isArray(j?.value) ? j.value.length : 0
+      } catch { /* ignore */ }
+      tried.push({ api: 'bulk', url, ok: r.ok, http, count })
+      if (count) break
+    }
+  }
 
-  const value = Array.isArray(json?.value) ? json.value : []
+  // zademonstruj 3 pierwsze rekordy po odfiltrowaniu do tej doby (UTC)
+  let sample: any[] = []
+  try {
+    const firstHit = tried.find(t => t.count > 0)
+    if (firstHit) {
+      const r = await fetch(firstHit.url, { headers: { accept: 'application/json' }})
+      const j = await r.json()
+      const rows: any[] = Array.isArray(j?.value) ? j.value : []
+      sample = rows.slice(0, 3)
+    }
+  } catch {}
+
   return new Response(JSON.stringify({
     ok: true,
-    api: 'v2',
     day,
-    http,
-    url,
-    count: value.length,
-    sample: value.slice(0, 3)
-  }, null, 2), { headers: { 'content-type': 'application/json' } })
+    tried,
+    hint: "Jeśli wszystkie http==400, serwer odrzuca filtr – wtedy fallback 'bulk' powinien zwrócić ostatnie rekordy, a /api/data je odetnie do zakresu.",
+    sample
+  }, null, 2), { headers: { 'content-type': 'application/json' }})
 }
