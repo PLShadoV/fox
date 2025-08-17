@@ -52,20 +52,21 @@ export default function Page() {
     return () => { ignore = true }
   }, [range.from, range.to])
 
-  // Polling LIVE
-  useEffect(() => {
-    let stop = false
-    async function tick() {
-      try {
-        const res = await fetch('/api/foxess/live', { cache: 'no-store' })
-        const json = await res.json()
-        if (!stop && json?.ok) setLive({ pv_w: json.pv_w, feedin_w: json.feedin_w })
-      } catch { /* ignore */ }
-      if (!stop) setTimeout(tick, 30000)
-    }
-    tick()
-    return () => { stop = true }
-  }, [])
+ // fragment w app/page.tsx – hook od live:
+useEffect(() => {
+  let stop = false
+  async function tick() {
+    try {
+      const res = await fetch('/api/foxess/live', { cache: 'no-store' })
+      const json = await res.json()
+      if (!stop && json?.ok) setLive({ pv_w: json.pv_w, feedin_w: json.feedin_w })
+    } catch {}
+    if (!stop) setTimeout(tick, 60_000) // 60 sekund
+  }
+  tick()
+  return () => { stop = true }
+}, [])
+
 
   const totals = useMemo(() => ({
     kwh: rows.reduce((s, r) => s + (Number(r.kwh) || 0), 0),

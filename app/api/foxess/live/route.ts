@@ -5,14 +5,18 @@ import type { NextRequest } from 'next/server'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-/** Podpis MD5: path + "\\r\\n" + token + "\\r\\n" + timestamp (LITERALNE backslashe) */
+// prościutki cache w pamięci (TTL = 60s)
+type LivePayload = { ok: true; pv_w: number; feedin_w: number } | { ok: false; error: string }
+const LIVE_TTL_MS = 60_000
+const g = globalThis as any
+g.__fox_live ||= { ts: 0, payload: null as LivePayload | null }
+
 function foxHeaders(path: string, tokenRaw: string) {
   const token = (tokenRaw || '').trim()
   const ts = Date.now().toString()
   const JOIN = '\\r\\n' // LITERAL \r\n — to jest kluczowe dla FoxESS Cloud
   const toSign = `${path}${JOIN}${token}${JOIN}${ts}`
   const signature = crypto.createHash('md5').update(toSign, 'utf8').digest('hex')
-
   return {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
@@ -25,54 +29,81 @@ function foxHeaders(path: string, tokenRaw: string) {
   }
 }
 
+async function realQuery(base: string, token: string, sn: string, vars?: string[]) {
+  const path = '/op/v0/device/real/query'
+  const url = new URL(path, base)
+  const body = vars && vars.length ? { sn, variables: vars } : { sn }
+  const res = await fetch(url.toString(), { method: 'POST', headers: foxHeaders(path, token), body: JSON.stringify(body) })
+  const text = await res.text()
+  let json: any; try { json = JSON.parse(text) } catch { json = null }
+  if (!res.ok) throw new Error(`FoxESS HTTP ${res.status} — ${text.slice(0, 200)}`)
+  if (json && typeof json.errno === 'number' && json.errno !== 0) throw new Error(`FoxESS errno ${json.errno}: ${json?.msg || 'error'}`)
+  return Array.isArray(json?.result) ? json.result as Array<{ variable: string; value: any }> : []
+}
+
+function pickNumber(arr: Array<{ variable: string; value: any }>, name: string) {
+  const item = arr.find(x => String(x?.variable || '').toLowerCase() === name)
+  const v = Number(item?.value ?? 0)
+  return isFinite(v) ? v : 0
+}
+
 export async function GET(_req: NextRequest) {
+  // cache 60s
+  if (g.__fox_live.payload && Date.now() - g.__fox_live.ts < LIVE_TTL_MS) {
+    return new Response(JSON.stringify(g.__fox_live.payload, null, 2), {
+      headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
+    })
+  }
+
   try {
     const base = (process.env.FOXESS_API_BASE || 'https://www.foxesscloud.com').trim()
     const token = (process.env.FOXESS_API_TOKEN || '').trim()
     const sn = (process.env.FOXESS_DEVICE_SN || '').trim()
     if (!token || !sn) {
-      return new Response(JSON.stringify({ ok: false, error: 'Brak FOXESS_API_TOKEN lub FOXESS_DEVICE_SN' }), { status: 400 })
+      const payload: LivePayload = { ok: false, error: 'Brak FOXESS_API_TOKEN lub FOXESS_DEVICE_SN' }
+      g.__fox_live = { ts: Date.now(), payload }
+      return new Response(JSON.stringify(payload, null, 2), { status: 400, headers: { 'content-type': 'application/json' } })
     }
 
-    const path = '/op/v0/device/real/query'
-    const url = new URL(path, base)
-    // Najczęściej działające zmienne (nazwy są case-insensitive po stronie FoxESS)
-    const body = {
-      sn,
-      variables: ['pvpower', 'feedinpower'],
+    // 1️⃣ najpierw prosimy o szeroki zestaw zmiennych
+    const primaryVars = [
+      'pvpower', 'generationpower', 'inverterpower',
+      'pv1power', 'pv2power', 'pv3power', 'pv4power',
+      'gridpower', 'feedinpower', 'loadsPower', 'batpower'
+    ]
+    let result = await realQuery(base, token, sn, primaryVars)
+
+    // 2️⃣ jeśli pusto — spróbuj bez listy (niektóre konta tylko tak zwracają)
+    if (!result.length) {
+      result = await realQuery(base, token, sn, undefined)
     }
 
-    const res = await fetch(url.toString(), {
-      method: 'POST',
-      headers: foxHeaders(path, token),
-      body: JSON.stringify(body),
-    })
+    // Heurystyka:
+    // PV = generationpower || pvpower || sum(pvXpower) || inverterpower (jeśli >0)
+    // FEED-IN = feedinpower || (gridpower < 0 ? -gridpower : 0)
+    const gen = pickNumber(result, 'generationpower')
+    const pv = pickNumber(result, 'pvpower')
+    const inv = pickNumber(result, 'inverterpower')
+    const pvSum =
+      pickNumber(result, 'pv1power') + pickNumber(result, 'pv2power') +
+      pickNumber(result, 'pv3power') + pickNumber(result, 'pv4power')
+    const grid = pickNumber(result, 'gridpower')
+    const feedin = pickNumber(result, 'feedinpower')
 
-    const text = await res.text()
-    let json: any
-    try { json = JSON.parse(text) } catch { /* fallback */ }
+    const pv_w = [gen, pv, pvSum, inv].find(v => v > 0) ?? 0
+    const feedin_w = feedin > 0 ? feedin : (grid < 0 ? -grid : 0)
 
-    if (!res.ok) {
-      return new Response(JSON.stringify({ ok: false, error: `FoxESS HTTP ${res.status}`, raw: text.slice(0, 200) }), { status: 502 })
-    }
-    if (json && typeof json.errno === 'number' && json.errno !== 0) {
-      return new Response(JSON.stringify({ ok: false, error: `FoxESS errno ${json.errno}: ${json?.msg || 'error'}` }), { status: 502 })
-    }
+    const payload: LivePayload = { ok: true, pv_w, feedin_w }
+    g.__fox_live = { ts: Date.now(), payload }
 
-    // Oczekiwany kształt: { result: [{ variable: 'pvpower', value: 1234 }, ... ] }
-    const arr = Array.isArray(json?.result) ? json.result : []
-    const v = (name: string) =>
-      Number(arr.find((x: any) => String(x?.variable || '').toLowerCase() === name)?.value ?? 0)
-
-    const pv_w = v('pvpower')
-    const feedin_w = v('feedinpower')
-
-    return new Response(JSON.stringify({ ok: true, pv_w, feedin_w }, null, 2), {
-      headers: { 'content-type': 'application/json' },
+    return new Response(JSON.stringify(payload, null, 2), {
+      headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
     })
   } catch (e: any) {
-    return new Response(JSON.stringify({ ok: false, error: e?.message || 'live error' }, null, 2), {
-      status: 500,
+    const payload: LivePayload = { ok: false, error: e?.message || 'live error' }
+    g.__fox_live = { ts: Date.now(), payload }
+    return new Response(JSON.stringify(payload, null, 2), {
+      status: 502,
       headers: { 'content-type': 'application/json' },
     })
   }

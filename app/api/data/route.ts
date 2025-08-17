@@ -6,73 +6,81 @@ import { fetchRcePlnHourly } from '@/lib/providers/rce'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-function partsInWarsaw(date: Date) {
-  const parts = new Intl.DateTimeFormat('en-GB', {
+// cache 60s po kluczu zakresu
+type Rows = Array<{ ts: string; kwh: number; price: number; revenue: number }>
+const DATA_TTL_MS = 60_000
+const g = globalThis as any
+g.__data_cache ||= new Map<string, { ts: number; rows: Rows }>()
+
+function partsPL(date: Date) {
+  const p = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/Warsaw',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23',
+    minute: '2-digit', second: '2-digit',
   }).formatToParts(date)
-  const get = (t: string) => Number(parts.find(p => p.type === t)!.value)
-  return { y: get('year'), m: get('month'), d: get('day'), H: get('hour') }
+  const get = (t: string) => Number(p.find(x => x.type === t)!.value)
+  return { y: get('year'), m: get('month'), d: get('day') }
 }
-function warsawDayBoundsISO(dt: Date) {
-  const { y, m, d } = partsInWarsaw(dt)
-  const start = new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0)).toISOString()
-  const end   = new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999)).toISOString()
-  return { start, end }
-}
-function enumerateWarsawMidnights(fromISO: string, toISO: string) {
-  const from = new Date(fromISO)
-  const to   = new Date(toISO)
-  const days: string[] = []
-  let cursor = new Date(warsawDayBoundsISO(from).start)
-  const last  = new Date(warsawDayBoundsISO(to).start)
-  while (cursor.getTime() <= last.getTime()) {
-    days.push(cursor.toISOString())
-    cursor = new Date(cursor.getTime() + 24 * 3600 * 1000)
+function dayBoundsPL(dt: Date) {
+  const { y, m, d } = partsPL(dt)
+  return {
+    start: new Date(Date.UTC(y, m - 1, d, 0, 0, 0, 0)).toISOString(),
+    end:   new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999)).toISOString(),
   }
-  return days
 }
-function clampRows<T extends { ts: string }>(rows: T[], fromISO: string, toISO: string): T[] {
-  const a = new Date(fromISO).getTime()
-  const b = new Date(toISO).getTime()
-  return rows.filter(r => {
-    const t = new Date(r.ts).getTime()
-    return t >= a && t <= b
-  })
+function enumerateMidnightsPL(fromISO: string, toISO: string) {
+  const from = new Date(fromISO); const to = new Date(toISO)
+  const list: string[] = []
+  let cur = new Date(dayBoundsPL(from).start)
+  const last = new Date(dayBoundsPL(to).start)
+  while (cur.getTime() <= last.getTime()) { list.push(cur.toISOString()); cur = new Date(cur.getTime() + 24*3600*1000) }
+  return list
+}
+function clamp<T extends { ts: string }>(rows: T[], fromISO: string, toISO: string) {
+  const a = new Date(fromISO).getTime(), b = new Date(toISO).getTime()
+  return rows.filter(r => { const t = new Date(r.ts).getTime(); return t >= a && t <= b })
 }
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
     const now = new Date()
-    const def = warsawDayBoundsISO(now)
+    const def = dayBoundsPL(now)
     const from = searchParams.get('from') || def.start
     const to   = searchParams.get('to')   || def.end
 
-    // 1) FoxESS – kWh per godzina
-    const dayStarts = enumerateWarsawMidnights(from, to)
+    const key = `${from}|${to}`
+    const cached = g.__data_cache.get(key)
+    if (cached && Date.now() - cached.ts < DATA_TTL_MS) {
+      return new Response(JSON.stringify({ ok: true, rows: cached.rows }, null, 2), {
+        headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
+      })
+    }
+
+    // 1) Energia z FoxESS (zbieramy dzień po dniu w PL)
+    const dayStarts = enumerateMidnightsPL(from, to)
     let energy: { ts: string; kwh: number }[] = []
     for (const dayStart of dayStarts) {
-      const dayEnd = new Date(new Date(dayStart).getTime() + 24 * 3600 * 1000 - 1).toISOString()
+      const dayEnd = new Date(new Date(dayStart).getTime() + 24*3600*1000 - 1).toISOString()
       const points = await fetchFoxEssHourlyExported(dayStart, dayEnd)
       energy.push(...points.map(p => ({ ts: p.timestamp, kwh: Number(p.exported_kwh || 0) })))
     }
-    energy = clampRows(energy, from, to)
+    energy = clamp(energy, from, to)
     energy.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
 
-    // 2) RCE – PLN/kWh per godzina (z API PSE)
-    const rceMap = await fetchRcePlnHourly(from, to) // Map<ISO hour, PLN/kWh>
+    // 2) Ceny RCE (PLN/kWh) dla tego samego zakresu
+    const rce = await fetchRcePlnHourly(from, to) // Map<ISOhour, PLN/kWh>
 
-    // 3) Merge → dodaj price + revenue
-    const rows = energy.map(e => {
-      const price = rceMap.get(e.ts) ?? 0
+    // 3) Merge
+    const rows: Rows = energy.map(e => {
+      const price = rce.get(e.ts) ?? 0
       const revenue = price * e.kwh
       return { ts: e.ts, kwh: e.kwh, price, revenue }
     })
 
+    g.__data_cache.set(key, { ts: Date.now(), rows })
     return new Response(JSON.stringify({ ok: true, rows }, null, 2), {
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
     })
   } catch (e: any) {
     return new Response(JSON.stringify({ ok: false, error: e?.message || 'data error' }, null, 2), {
