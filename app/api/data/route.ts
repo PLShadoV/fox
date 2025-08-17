@@ -24,13 +24,13 @@ function isoForWarsawHour(y: number, m1: number, d: number, h: number) {
   return new Date(Date.UTC(Y, M - 1, D, H, 0, 0)).toISOString()
 }
 
-function parseRange(req: NextRequest): { fromISO: string; toISO: string; dayY: number; dayM: number; dayD: number } {
+function parseRange(req: NextRequest): { fromISO: string; toISO: string } {
   const { searchParams } = new URL(req.url)
   const q = searchParams.get('date') || searchParams.get('day') || searchParams.get('d')
-  const range = (searchParams.get('range') || '').toLowerCase()
+  const range = (searchParams.get('range') || '').toLowerCase() // today|yesterday
   if (q) {
     const [y, m, d] = q.split('-').map(Number)
-    return { fromISO: isoForWarsawHour(y, (m || 1) - 1, d || 1, 0), toISO: isoForWarsawHour(y, (m || 1) - 1, (d || 1) + 1, 0), dayY: y, dayM: m || 1, dayD: d || 1 }
+    return { fromISO: isoForWarsawHour(y, (m || 1) - 1, d || 1, 0), toISO: isoForWarsawHour(y, (m || 1) - 1, (d || 1) + 1, 0) }
   }
   const nowParts = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())
   let Y = Number(nowParts.find(p => p.type === 'year')!.value)
@@ -40,7 +40,7 @@ function parseRange(req: NextRequest): { fromISO: string; toISO: string; dayY: n
     const mid = new Date(Date.UTC(Y, M - 1, D, 12)); mid.setUTCDate(mid.getUTCDate() - 1)
     Y = mid.getUTCFullYear(); M = mid.getUTCMonth() + 1; D = mid.getUTCDate()
   }
-  return { fromISO: isoForWarsawHour(Y, M - 1, D, 0), toISO: isoForWarsawHour(Y, M - 1, D + 1, 0), dayY: Y, dayM: M, dayD: D }
+  return { fromISO: isoForWarsawHour(Y, M - 1, D, 0), toISO: isoForWarsawHour(Y, M - 1, D + 1, 0) }
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string) {
@@ -54,7 +54,7 @@ export async function GET(req: NextRequest) {
   const { fromISO, toISO } = parseRange(req)
   const errors: Record<string, string> = {}
 
-  // Ładujemy providery
+  // Równolegle, z timeoutami
   const foxP = (async () => {
     const { fetchFoxEssHourlyExported } = await import('@/lib/providers/foxess')
     return fetchFoxEssHourlyExported(fromISO, toISO) as Promise<Array<{ timestamp: string; exported_kwh: number }>>
@@ -74,6 +74,7 @@ export async function GET(req: NextRequest) {
   if (foxRes.status === 'fulfilled') fox = foxRes.value; else errors.foxess = foxRes.reason?.message || String(foxRes.reason)
   if (rceRes.status === 'fulfilled') rce = rceRes.value; else errors.rce = rceRes.reason?.message || String(rceRes.reason)
 
+  // Merge
   const map = new Map<string, HourRow>()
   for (const p of fox) map.set(p.timestamp, { timestamp: p.timestamp, exported_kwh: Number(p.exported_kwh) || 0 })
   for (const p of rce) {
