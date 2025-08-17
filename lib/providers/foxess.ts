@@ -4,55 +4,48 @@ import crypto from 'crypto'
 
 const TZ = 'Europe/Warsaw'
 
-/** Oblicz offset (minuty) strefy PL dla TEJ lokalnej daty/godziny (z DST) */
-function offsetMinFor(y: number, m1: number, d: number, h = 0, mi = 0) {
-  const probe = new Date(Date.UTC(y, m1, d, h, mi, 0, 0))
-  const s = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, timeZoneName: 'short' }).format(probe)
-  const m = s.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/)
-  if (!m) return [3,4,5,6,7,8,9].includes(m1) ? 120 : 60 // fallback: lato/zima
-  const sign = m[1].startsWith('-') ? -1 : 1
-  const hh = Math.abs(parseInt(m[1], 10))
-  const mm = m[2] ? parseInt(m[2], 10) : 0
-  return sign * (hh * 60 + mm)
-}
-
-/** ISO instant odpowiadający lokalnej godzinie PL (uwzględnia DST) */
-function isoForWarsawHour(y: number, m1: number, d: number, h: number) {
-  const off = offsetMinFor(y, m1, d, h, 0)
-  return new Date(Date.UTC(y, m1, d, h, 0, 0, 0) - off * 60_000).toISOString()
-}
-
-/** Wyciągnij Y/M/D w strefie PL z dowolnego ISO instanta */
-function ymdFromISO_PL(iso: string) {
-  const dt = new Date(iso)
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: TZ,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(dt)
-  const get = (t: string) => Number(parts.find(p => p.type === t)!.value)
-  return { y: get('year'), m: get('month'), d: get('day') }
-}
-
-/** Podpis MD5 FoxESS – LITERALNE \r\n w stringu */
+/** Podpis MD5 dla FoxESS: path + "\\r\\n" + token + "\\r\\n" + timestamp (LITERALNE backslashe). */
 function foxHeaders(path: string, tokenRaw: string) {
   const token = (tokenRaw || '').trim()
-  const ts = Date.now().toString()
-  const JOIN = '\\r\\n' // ← dosłowne \r\n (tak weryfikuje FoxESS)
-  const toSign = `${path}${JOIN}${token}${JOIN}${ts}`
+  const timestamp = Date.now().toString()
+  const JOIN = '\\r\\n' // ← LITERALNE \r\n, nie prawdziwy CRLF
+  const toSign = `${path}${JOIN}${token}${JOIN}${timestamp}`
   const signature = crypto.createHash('md5').update(toSign, 'utf8').digest('hex')
+
   return {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
     token,
-    timestamp: ts,
-    signature,
+    timestamp,
+    signature, // wymagany nagłówek
     lang: 'en',
     'User-Agent':
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
   }
 }
 
-/** FoxESS Cloud: /op/v0/device/report/query (domyślnie zmienna "feedin") */
+/** ISO z godziną ścienną w Europe/Warsaw */
+function isoForWarsawHour(y: number, m1: number, d: number, h: number) {
+  const seed = new Date(Date.UTC(y, m1, d, h))
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(seed)
+  const Y = Number(parts.find((p) => p.type === 'year')!.value)
+  const M = Number(parts.find((p) => p.type === 'month')!.value)
+  const D = Number(parts.find((p) => p.type === 'day')!.value)
+  const H = Number(parts.find((p) => p.type === 'hour')!.value)
+  const warsawAsUTC = new Date(Date.UTC(Y, M - 1, D, H, 0, 0))
+  return warsawAsUTC.toISOString()
+}
+
+/** FoxESS Cloud: /op/v0/device/report/query (zmienna domyślnie "feedin") */
 async function viaFoxCloud(fromISO: string): Promise<EnergyPoint[]> {
   const base = process.env.FOXESS_API_BASE || 'https://www.foxesscloud.com'
   const token = process.env.FOXESS_API_TOKEN
@@ -63,11 +56,13 @@ async function viaFoxCloud(fromISO: string): Promise<EnergyPoint[]> {
   if (!token) throw new Error('Brak FOXESS_API_TOKEN')
   if (!sn) throw new Error('Brak FOXESS_DEVICE_SN')
 
-  // 🔑 KLUCZOWE: rok/miesiąc/dzień bierzemy w STREFIE PL, nie z UTC!
-  const { y, m, d } = ymdFromISO_PL(fromISO)
+  const d = new Date(fromISO)
+  const y = d.getUTCFullYear()
+  const m = d.getUTCMonth() + 1
+  const day = d.getUTCDate()
 
   const url = new URL(path, base)
-  const body = { sn, year: y, month: m, day: d, dimension: 'day', variables: [variable] }
+  const body = { sn, year: y, month: m, day, dimension: 'day', variables: [variable] }
 
   const res = await fetch(url.toString(), {
     method: 'POST',
@@ -78,6 +73,7 @@ async function viaFoxCloud(fromISO: string): Promise<EnergyPoint[]> {
 
   const ct = res.headers.get('content-type') || ''
   const text = await res.text()
+
   if (!res.ok) throw new Error(`FoxESS HTTP ${res.status} — ${text.slice(0, 200)}`)
   if (!ct.includes('application/json')) {
     throw new Error(`FoxESS zwrócił ${ct || 'brak content-type'}. Fragment: ${text.slice(0, 200)}`)
@@ -95,7 +91,7 @@ async function viaFoxCloud(fromISO: string): Promise<EnergyPoint[]> {
   const out: EnergyPoint[] = []
   for (let h = 0; h < 24; h++) {
     const val = Number(series[h] ?? 0)
-    out.push({ timestamp: isoForWarsawHour(y, m - 1, d, h), exported_kwh: isFinite(val) ? val : 0 })
+    out.push({ timestamp: isoForWarsawHour(y, m - 1, day, h), exported_kwh: isFinite(val) ? val : 0 })
   }
   return out
 }
@@ -128,7 +124,7 @@ async function viaJson(fromISO: string, toISO: string): Promise<EnergyPoint[]> {
   return (await res.json()) as EnergyPoint[]
 }
 
-/** Tryb: własny backend (Bearer) */
+/** Tryb: generyczny "cloud" (Bearer) */
 async function viaGenericCloud(fromISO: string, toISO: string): Promise<EnergyPoint[]> {
   const base = process.env.FOXESS_API_BASE
   const token = process.env.FOXESS_API_TOKEN
@@ -144,10 +140,17 @@ async function viaGenericCloud(fromISO: string, toISO: string): Promise<EnergyPo
 
   const init: RequestInit = {
     method,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
     next: { revalidate: 300 },
   }
-  if (method === 'POST') { delete (init as any).next; init.body = JSON.stringify({ from: fromISO, to: toISO, sn }) }
+  if (method === 'POST') {
+    delete (init as any).next
+    init.body = JSON.stringify({ from: fromISO, to: toISO, sn })
+  }
 
   const res = await fetch(url.toString(), init)
   const ct = res.headers.get('content-type') || ''
@@ -158,7 +161,9 @@ async function viaGenericCloud(fromISO: string, toISO: string): Promise<EnergyPo
   }
 
   const raw = JSON.parse(text)
-  if (Array.isArray(raw) && raw.length && 'timestamp' in raw[0] && 'exported_kwh' in raw[0]) return raw as EnergyPoint[]
+  if (Array.isArray(raw) && raw.length && 'timestamp' in raw[0] && 'exported_kwh' in raw[0]) {
+    return raw as EnergyPoint[]
+  }
   if (raw?.data && Array.isArray(raw.data)) {
     return raw.data.map((r: any) => ({
       timestamp: r.timestamp ?? r.time ?? r.datetime,
@@ -172,17 +177,20 @@ async function viaGenericCloud(fromISO: string, toISO: string): Promise<EnergyPo
 export async function fetchFoxEssHourlyExported(fromISO: string, toISO: string): Promise<EnergyPoint[]> {
   const mode = process.env.FOXESS_MODE ?? 'mock'
   if (mode === 'proxy') return viaProxy(fromISO, toISO)
-  if (mode === 'json')  return viaJson(fromISO, toISO)
+  if (mode === 'json') return viaJson(fromISO, toISO)
   if (mode === 'cloud') {
-    if ((process.env.FOXESS_API_BASE || '').includes('foxesscloud.com')) return viaFoxCloud(fromISO)
+    if ((process.env.FOXESS_API_BASE || '').includes('foxesscloud.com')) {
+      return viaFoxCloud(fromISO)
+    }
     return viaGenericCloud(fromISO, toISO)
   }
 
-  // fallback: mock (24 losowe punkty dla testu UI)
+  // fallback: mock
   const start = new Date(fromISO)
   const rows: EnergyPoint[] = []
   for (let i = 0; i < 24; i++) {
-    const t = new Date(start); t.setHours(start.getHours() + i)
+    const t = new Date(start)
+    t.setHours(start.getHours() + i)
     rows.push({ timestamp: t.toISOString(), exported_kwh: +(Math.random() * 2).toFixed(3) })
   }
   return rows
