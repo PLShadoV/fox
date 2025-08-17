@@ -17,7 +17,7 @@ g.__fox_live ||= { ts: 0, payload: null as LivePayload | null }
 function foxHeaders(path: string, tokenRaw: string) {
   const token = (tokenRaw || '').trim()
   const ts = Date.now().toString()
-  const JOIN = '\\r\\n' // LITERALNE \r\n dla FoxESS
+  const JOIN = '\\r\\n' // LITERALNE \r\n – tak akceptuje FoxESS Cloud
   const toSign = `${path}${JOIN}${token}${JOIN}${ts}`
   const signature = crypto.createHash('md5').update(toSign, 'utf8').digest('hex')
   return {
@@ -35,7 +35,7 @@ function foxHeaders(path: string, tokenRaw: string) {
 async function realQuery(base: string, token: string, sn: string, vars?: string[]) {
   const path = '/op/v0/device/real/query'
   const url = new URL(path, base)
-  const body = vars && vars.length ? { sn, variables: vars } : { sn }
+  const body = vars?.length ? { sn, variables: vars } : { sn }
   const res = await fetch(url.toString(), {
     method: 'POST',
     headers: foxHeaders(path, token),
@@ -43,35 +43,56 @@ async function realQuery(base: string, token: string, sn: string, vars?: string[
   })
   const text = await res.text()
   let json: any
-  try {
-    json = JSON.parse(text)
-  } catch {
-    json = null
-  }
+  try { json = JSON.parse(text) } catch { json = null }
   if (!res.ok) throw new Error(`FoxESS HTTP ${res.status} — ${text.slice(0, 200)}`)
   if (json && typeof json.errno === 'number' && json.errno !== 0) {
     throw new Error(`FoxESS errno ${json.errno}: ${json?.msg || 'error'}`)
   }
-  return Array.isArray(json?.result) ? (json.result as Array<{ variable: string; value: any }>) : []
+  return Array.isArray(json?.result) ? json.result as Array<{ variable: string; value: any }> : []
 }
 
-function num(v: any) {
+const NAMES = {
+  pv: [
+    'pvpower','generationpower','inverterpower','acpower',
+    'ppv', 'pv_total_power'
+  ],
+  pvRegex: [/^pv\d+power$/i, /^pv\d+_?powerw?$/i],
+  feed: ['feedinpower','exportpower'],
+  grid: ['gridpower','gridactivepower','grid_export_power','gridimportpower','gridexportpower'],
+} as const
+
+const toNumber = (v: any) => {
+  if (typeof v === 'string') {
+    // usuń ewentualne sufiksy „ W”, „kW” itd.
+    const s = v.replace(/[^\d\.\-]/g, '')
+    const n = Number(s)
+    return isFinite(n) ? n : 0
+  }
   const n = Number(v)
   return isFinite(n) ? n : 0
 }
-function pick(arr: Array<{ variable: string; value: any }>, ...names: string[]) {
-  const lower = names.map((n) => n.toLowerCase())
-  const hit = arr.find((x) => lower.includes(String(x?.variable || '').toLowerCase()))
-  return num(hit?.value)
+function pick(arr: Array<{variable: string; value: any}>, names: string[]) {
+  const lower = names.map(n => n.toLowerCase())
+  const hit = arr.find(x => lower.includes(String(x?.variable || '').toLowerCase()))
+  return toNumber(hit?.value)
 }
-function pickByPattern(arr: Array<{ variable: string; value: any }>, re: RegExp, aggregate: 'sum' | 'max' = 'sum') {
-  const vals = arr.filter((x) => re.test(String(x?.variable || ''))).map((x) => num(x.value))
+function pickByRegex(arr: Array<{variable: string; value: any}>, regs: RegExp[], agg: 'sum'|'max'='sum') {
+  const vals: number[] = []
+  for (const r of regs) {
+    for (const x of arr) {
+      if (r.test(String(x?.variable || ''))) vals.push(toNumber(x.value))
+    }
+  }
   if (!vals.length) return 0
-  return aggregate === 'sum' ? vals.reduce((a, b) => a + b, 0) : Math.max(...vals)
+  return agg === 'sum' ? vals.reduce((a,b)=>a+b,0) : Math.max(...vals)
 }
 
-export async function GET(_req: NextRequest) {
-  if (g.__fox_live.payload && Date.now() - g.__fox_live.ts < LIVE_TTL_MS) {
+export async function GET(req: NextRequest) {
+  const url = new URL(req.url)
+  const wantDebug = url.searchParams.get('debug') === '1'
+
+  // cache (tylko gdy nie prosimy o debug)
+  if (!wantDebug && g.__fox_live.payload && Date.now() - g.__fox_live.ts < LIVE_TTL_MS) {
     return new Response(JSON.stringify(g.__fox_live.payload, null, 2), {
       headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
     })
@@ -83,48 +104,41 @@ export async function GET(_req: NextRequest) {
     const sn = (process.env.FOXESS_DEVICE_SN || '').trim()
     if (!token || !sn) {
       const payload: LivePayload = { ok: false, error: 'Brak FOXESS_API_TOKEN lub FOXESS_DEVICE_SN' }
-      g.__fox_live = { ts: Date.now(), payload }
-      return new Response(JSON.stringify(payload, null, 2), {
-        status: 400,
-        headers: { 'content-type': 'application/json' },
-      })
+      if (!wantDebug) g.__fox_live = { ts: Date.now(), payload }
+      return new Response(JSON.stringify(payload, null, 2), { status: 400, headers: { 'content-type': 'application/json' } })
     }
 
-    const firstVars = [
-      'pvpower',
-      'generationpower',
-      'inverterpower',
-      'acpower',
-      'pv1power',
-      'pv2power',
-      'pv3power',
-      'pv4power',
-      'gridpower',
-      'feedinpower',
-      'loadspower',
-      'batpower',
+    // 1) szeroki zestaw nazw
+    const first = [
+      ...NAMES.pv,
+      'pv1power','pv2power','pv3power','pv4power',
+      ...NAMES.feed, ...NAMES.grid, 'loadspower','batpower'
     ]
-    let arr = await realQuery(base, token, sn, firstVars)
-    if (!arr.length) arr = await realQuery(base, token, sn) // fallback
+    let vars = await realQuery(base, token, sn, first)
 
-    const gen = pick(arr, 'generationpower', 'acpower')
-    const pv = pick(arr, 'pvpower')
-    const inv = pick(arr, 'inverterpower')
-    const pvSum = pickByPattern(arr, /^pv\d+power$/i, 'sum')
-    const grid = pick(arr, 'gridpower')
-    const feedin = pick(arr, 'feedinpower')
+    // 2) fallback – bez listy
+    if (!vars.length) vars = await realQuery(base, token, sn)
 
-    const pv_w = [gen, pv, pvSum, inv].find((v) => v > 0) ?? 0
-    const feedin_w = feedin > 0 ? feedin : grid < 0 ? -grid : 0
+    // heurystyki
+    const pvCand = [
+      pick(vars, NAMES.pv),
+      pickByRegex(vars, NAMES.pvRegex, 'sum'),
+    ].filter(v => v>0)
+    const pv_w = pvCand.length ? pvCand[0] : 0
 
-    const payload: LivePayload = { ok: true, pv_w, feedin_w }
-    g.__fox_live = { ts: Date.now(), payload }
+    const feedRaw = pick(vars, NAMES.feed)
+    const grid = pick(vars, NAMES.grid)
+    const feedin_w = feedRaw > 0 ? feedRaw : (grid < 0 ? -grid : 0)
+
+    const payload: LivePayload = { ok: true, pv_w, feedin_w, dbg: wantDebug ? { sample: vars.slice(0, 30) } : undefined }
+    if (!wantDebug) g.__fox_live = { ts: Date.now(), payload }
+
     return new Response(JSON.stringify(payload, null, 2), {
       headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
     })
   } catch (e: any) {
     const payload: LivePayload = { ok: false, error: e?.message || 'live error' }
-    g.__fox_live = { ts: Date.now(), payload }
+    if (!wantDebug) g.__fox_live = { ts: Date.now(), payload }
     return new Response(JSON.stringify(payload, null, 2), {
       status: 502,
       headers: { 'content-type': 'application/json' },
