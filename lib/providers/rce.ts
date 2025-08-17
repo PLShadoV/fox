@@ -1,23 +1,27 @@
 // lib/providers/rce.ts
 /**
- * RCE (PLN/MWh) z PSE v2 → Map<ISO_UTC_hour, PLN/kWh>
- * Odporny na warianty pól czasu i filtry:
- *  - business_date / doba
- *  - fallback: zakres po udtczas (czas lokalny PL)
+ * RCE (PLN/MWh) → Map<ISO_UTC_hour, PLN/kWh>
+ * Odporne na zmiany pól czasu i filtry OData + fallback na v1 API.
  */
 
-const PSE_BASE = process.env.PSE_API_BASE || 'https://api.raporty.pse.pl'
+const PSE_BASE_V2 = process.env.PSE_API_BASE || 'https://api.raporty.pse.pl'
+const PSE_BASE_V1 = 'https://v1.api.raporty.pse.pl'
 const TZ = 'Europe/Warsaw'
 
 type RceRow = {
   rce_pln?: number
   business_date?: string
   doba?: string
-  // czasy:
-  period_utc?: string       // 2025-08-17T12:00:00Z
-  dtime_utc?: string        // 2025-08-17T12:00:00Z
-  udtczas_oreb?: string     // 'YYYY-MM-DD HH:mm' (PL)
-  udtczas?: string          // 'YYYY-MM-DD HH:mm' (PL)
+  period_utc?: string
+  dtime_utc?: string
+  udtczas?: string
+  udtczas_oreb?: string
+}
+
+type Tried = { filter: string; url: string; count: number }
+export type RceFetchDebug = {
+  day: string
+  bases: Array<{ base: string; tried: Tried[] }>
 }
 
 /* ---------- pomocnicze: czas PL → UTC ---------- */
@@ -50,68 +54,86 @@ function addDaysISO(iso: string, days: number) {
   return d.toISOString()
 }
 
-/* ---------- pobranie z API z danym $filter ---------- */
-async function fetchRceWithFilter(ymd: string, filter: string): Promise<RceRow[]> {
-  const url = new URL('/api/rce-pln', PSE_BASE)
-  url.searchParams.set('$select', [
-    'rce_pln',
-    'business_date','doba',
-    'period_utc','dtime_utc',
-    'udtczas_oreb','udtczas'
-  ].join(','))
-  url.searchParams.set('$filter', filter)
-  url.searchParams.set('$orderby', 'period_utc asc,dtime_utc asc,udtczas asc,udtczas_oreb asc')
-  url.searchParams.set('$top', '200') // zapas na 24–48 rekordów
+/* ---------- budowa URL z ręcznym kodowaniem OData ---------- */
+function buildRceUrl(base: string, filter: string) {
+  const qs = [
+    // pobieramy maks info i prosty JSON
+    `$select=${encodeURIComponent([
+      'rce_pln',
+      'business_date','doba',
+      'period_utc','dtime_utc',
+      'udtczas','udtczas_oreb'
+    ].join(','))}`,
+    `$filter=${encodeURIComponent(filter)}`,
+    `$orderby=${encodeURIComponent('period_utc asc,dtime_utc asc,udtczas asc,udtczas_oreb asc')}`,
+    `$top=200`,
+    `$count=true`,
+    `$format=application/json`
+  ].join('&')
+  return `${base.replace(/\/+$/,'')}/api/rce-pln?${qs}`
+}
 
-  const res = await fetch(url.toString(), { next: { revalidate: 1800 } })
-  const ct = res.headers.get('content-type') || ''
+async function fetchRceWithFilter(base: string, filter: string): Promise<{ rows: RceRow[]; tried: Tried }> {
+  const url = buildRceUrl(base, filter)
+  const res = await fetch(url, { headers: { 'accept': 'application/json' }, next: { revalidate: 1800 } })
   const txt = await res.text()
-  if (!res.ok) throw new Error(`RCE HTTP ${res.status} — ${txt.slice(0,200)}`)
-  if (!ct.includes('application/json')) throw new Error(`RCE zwróciło ${ct}. Fragment: ${txt.slice(0,120)}`)
-  const json = JSON.parse(txt)
-  const rows: RceRow[] = Array.isArray(json?.value) ? json.value
-                     : Array.isArray(json) ? json : []
-  return rows
+  let rows: any = []
+  try {
+    const json = JSON.parse(txt)
+    rows = Array.isArray(json?.value) ? json.value : (Array.isArray(json) ? json : [])
+  } catch {
+    rows = []
+  }
+  return { rows, tried: { filter, url, count: Array.isArray(rows) ? rows.length : 0 } }
 }
 
-/* ---------- jedna doba: próby 3 filtrów ---------- */
-export type RceFetchDebug = {
-  day: string
-  tried: Array<{ filter: string; count: number }>
+/* ---------- jedna doba: wiele filtrów + zwrot debug ---------- */
+async function fetchRceDayFromBase(base: string, ymd: string) {
+  const filters: string[] = [
+    // 1) business_date jako date (bez cudzysłowów) i jako string
+    `(business_date eq ${ymd})`,
+    `(business_date eq '${ymd}')`,
+    // 2) doba (string)
+    `(doba eq '${ymd}')`,
+    // 3) zakresy czasowe po UTC
+    `(period_utc ge ${ymd}T00:00:00Z and period_utc lt ${ymd}T00:00:00Z add 1.00:00:00)`,
+    `(dtime_utc ge ${ymd}T00:00:00Z and dtime_utc lt ${ymd}T00:00:00Z add 1.00:00:00)`,
+    // 4) zakresy po lokalnym PL
+    `(udtczas ge '${ymd} 00:00' and udtczas le '${ymd} 23:59')`,
+    `(udtczas_oreb ge '${ymd} 00:00' and udtczas_oreb le '${ymd} 23:59')`,
+  ]
+
+  const tried: Tried[] = []
+  for (const f of filters) {
+    const { rows, tried: t } = await fetchRceWithFilter(base, f)
+    tried.push(t)
+    if (Array.isArray(rows) && rows.length) {
+      return { rows: rows as RceRow[], tried }
+    }
+  }
+  return { rows: [] as RceRow[], tried }
 }
 
-async function fetchRceDayRobust(ymd: string): Promise<{ rows: RceRow[], dbg: RceFetchDebug }> {
-  const tried: RceFetchDebug['tried'] = []
-
-  // 1) business_date
-  const f1 = `(business_date eq '${ymd}')`
-  let rows = await fetchRceWithFilter(ymd, f1).catch(() => [] as RceRow[])
-  tried.push({ filter: f1, count: rows.length })
-  if (rows.length) return { rows, dbg: { day: ymd, tried } }
-
-  // 2) doba (to samo znaczenie, inna nazwa pola)
-  const f2 = `(doba eq '${ymd}')`
-  rows = await fetchRceWithFilter(ymd, f2).catch(() => [] as RceRow[])
-  tried.push({ filter: f2, count: rows.length })
-  if (rows.length) return { rows, dbg: { day: ymd, tried } }
-
-  // 3) zakres po lokalnym czasie udtczas
-  const start = `${ymd} 00:00`
-  const end   = `${ymd} 23:59`
-  const f3 = `(udtczas ge '${start}' and udtczas le '${end}')`
-  rows = await fetchRceWithFilter(ymd, f3).catch(() => [] as RceRow[])
-  tried.push({ filter: f3, count: rows.length })
-  return { rows, dbg: { day: ymd, tried } }
+/** (eksport) – debug z obiema bazami */
+export async function debugRceDay(dayYmd: string): Promise<RceFetchDebug> {
+  const out: RceFetchDebug = { day: dayYmd, bases: [] }
+  // v2
+  const v2 = await fetchRceDayFromBase(PSE_BASE_V2, dayYmd)
+  out.bases.push({ base: PSE_BASE_V2, tried: v2.tried })
+  // v1
+  const v1 = await fetchRceDayFromBase(PSE_BASE_V1, dayYmd)
+  out.bases.push({ base: PSE_BASE_V1, tried: v1.tried })
+  return out
 }
 
-/** Mapuje wiersz do klucza ISO UTC i ceny w PLN/kWh. */
+/** mapowanie wiersza na [ISO_UTC_godzina, PLN/kWh] */
 function mapRowToPoint(r: RceRow): [string, number] | null {
   if (typeof r.rce_pln !== 'number') return null
   const priceKwh = r.rce_pln / 1000 // PLN/MWh → PLN/kWh
 
-  // Priorytet: UTC → PL
-  if (r.period_utc)  return [new Date(r.period_utc).toISOString(), priceKwh]
-  if (r.dtime_utc)   return [new Date(r.dtime_utc).toISOString(),  priceKwh]
+  // Priorytet: gotowe UTC
+  if (r.period_utc) return [new Date(r.period_utc).toISOString(), priceKwh]
+  if (r.dtime_utc)  return [new Date(r.dtime_utc).toISOString(),  priceKwh]
 
   // PL → UTC
   const asPL = (s?: string) => {
@@ -121,43 +143,46 @@ function mapRowToPoint(r: RceRow): [string, number] | null {
     const Y = +m[1], M = +m[2], D = +m[3], H = +m[4]
     return isoForWarsawHour(Y, M - 1, D, H)
   }
-  const fromUdt = asPL(r.udtczas);      if (fromUdt) return [fromUdt, priceKwh]
-  const fromOre = asPL(r.udtczas_oreb); if (fromOre) return [fromOre, priceKwh]
+  const u1 = asPL(r.udtczas);      if (u1) return [u1, priceKwh]
+  const u2 = asPL(r.udtczas_oreb); if (u2) return [u2, priceKwh]
 
   return null
 }
 
-/**
- * Główna funkcja: Map<ISO_UTC_godzina, PLN/kWh>. Zwracamy wszystkie dni w zakresie.
- */
+/** główna: Map<ISO_UTC_hour, PLN/kWh>; próba v2 → fallback v1 */
 export async function fetchRcePlnMap(fromISO: string, toISO: string): Promise<Map<string, number>> {
   if (!fromISO || !toISO) return new Map()
 
-  const ymdFrom = ymdWarsaw(fromISO)
-  const ymdTo   = ymdWarsaw(toISO)
-
+  // zbiór dni PL w zakresie
   const days: string[] = []
-  let cursor = new Date(`${ymdFrom}T00:00:00.000Z`).toISOString()
+  let cur = new Date(fromISO)
+  const end = new Date(toISO)
   while (true) {
-    const y = ymdWarsaw(cursor)
-    days.push(y)
-    if (y === ymdTo) break
-    cursor = addDaysISO(cursor, 1)
+    const ymd = ymdWarsaw(cur.toISOString())
+    if (!days.includes(ymd)) days.push(ymd)
+    if (ymd === ymdWarsaw(end.toISOString())) break
+    cur.setUTCDate(cur.getUTCDate() + 1)
+  }
+
+  // najpierw v2
+  let collected: RceRow[] = []
+  for (const d of days) {
+    const v2 = await fetchRceDayFromBase(PSE_BASE_V2, d)
+    if (v2.rows.length) collected.push(...v2.rows)
+  }
+  // fallback na v1 jeśli dalej nic
+  if (!collected.length) {
+    for (const d of days) {
+      const v1 = await fetchRceDayFromBase(PSE_BASE_V1, d)
+      if (v1.rows.length) collected.push(...v1.rows)
+    }
   }
 
   const out = new Map<string, number>()
-  for (const ymd of days) {
-    const { rows } = await fetchRceDayRobust(ymd)
-    for (const r of rows) {
-      const p = mapRowToPoint(r)
-      if (!p) continue
-      out.set(p[0], p[1]) // ISO UTC → PLN/kWh (może być ujemna)
-    }
+  for (const r of collected) {
+    const p = mapRowToPoint(r)
+    if (!p) continue
+    out.set(p[0], p[1])
   }
   return out
-}
-
-/** (opcjonalnie) debug do wglądu, które filtry zadziałały */
-export async function debugRceDay(ymd: string) {
-  return await fetchRceDayRobust(ymd)
 }
