@@ -1,12 +1,13 @@
 // app/api/data/route.ts
 import { NextRequest } from 'next/server'
 import { fetchFoxEssHourlyExported } from '@/lib/providers/foxess'
-import { fetchRcePlnMap } from '@/lib/providers/rce'  // ⬅️ nowa funkcja!
+import { fetchRcePlnMap } from '@/lib/providers/rce' // ⬅️ UPEWNIJ SIĘ, ŻE TO TEN IMPORT
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 type Row = { ts: string; kwh: number; price: number; revenue: number }
+
 const TZ = 'Europe/Warsaw'
 
 /* ----------------------- CZAS: PL -> UTC (z DST) ----------------------- */
@@ -72,7 +73,6 @@ function clampToHourUTC(d: Date) {
 }
 
 /* --------------------------- CACHE na 60 s --------------------------- */
-type Row = { ts: string; kwh: number; price: number; revenue: number }
 type CacheEntry = { ts: number; rows: Row[]; stats?: any }
 const DATA_TTL_MS = 60_000
 const g = globalThis as any
