@@ -5,7 +5,8 @@ import type { NextRequest } from 'next/server'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// cache 60 s
+// cache 60 s (ograniczenie zapytań)
+type FoxVar = { variable?: string; value?: any; unit?: string }
 type LivePayload =
   | { ok: true; pv_w: number; feedin_w: number; dbg?: any }
   | { ok: false; error: string; dbg?: any }
@@ -17,7 +18,7 @@ g.__fox_live ||= { ts: 0, payload: null as LivePayload | null }
 function foxHeaders(path: string, tokenRaw: string) {
   const token = (tokenRaw || '').trim()
   const ts = Date.now().toString()
-  const JOIN = '\\r\\n' // LITERALNE \r\n – tak akceptuje FoxESS Cloud
+  const JOIN = '\\r\\n' // LITERALNE \r\n – tego wymaga FoxESS Cloud
   const toSign = `${path}${JOIN}${token}${JOIN}${ts}`
   const signature = crypto.createHash('md5').update(toSign, 'utf8').digest('hex')
   return {
@@ -32,10 +33,10 @@ function foxHeaders(path: string, tokenRaw: string) {
   }
 }
 
-async function realQuery(base: string, token: string, sn: string, vars?: string[]) {
+async function realQuery(base: string, token: string, sn: string, vars?: ReadonlyArray<string>) {
   const path = '/op/v0/device/real/query'
   const url = new URL(path, base)
-  const body = vars?.length ? { sn, variables: vars } : { sn }
+  const body = vars && vars.length ? { sn, variables: Array.from(vars) } : { sn }
   const res = await fetch(url.toString(), {
     method: 'POST',
     headers: foxHeaders(path, token),
@@ -48,35 +49,40 @@ async function realQuery(base: string, token: string, sn: string, vars?: string[
   if (json && typeof json.errno === 'number' && json.errno !== 0) {
     throw new Error(`FoxESS errno ${json.errno}: ${json?.msg || 'error'}`)
   }
-  return Array.isArray(json?.result) ? json.result as Array<{ variable: string; value: any }> : []
+  return Array.isArray(json?.result) ? (json.result as FoxVar[]) : []
 }
 
 const NAMES = {
   pv: [
-    'pvpower','generationpower','inverterpower','acpower',
-    'ppv', 'pv_total_power'
-  ],
-  pvRegex: [/^pv\d+power$/i, /^pv\d+_?powerw?$/i],
-  feed: ['feedinpower','exportpower'],
-  grid: ['gridpower','gridactivepower','grid_export_power','gridimportpower','gridexportpower'],
+    'pvpower', 'generationpower', 'inverterpower', 'acpower',
+    'ppv', 'pv_total_power',
+  ] as const,
+  pvRegex: [/^pv\d+power$/i, /^pv\d+_?powerw?$/i] as const,
+  feed: ['feedinpower', 'exportpower'] as const,
+  grid: ['gridpower', 'gridactivepower', 'grid_export_power', 'gridimportpower', 'gridexportpower'] as const,
 } as const
 
 const toNumber = (v: any) => {
   if (typeof v === 'string') {
-    // usuń ewentualne sufiksy „ W”, „kW” itd.
-    const s = v.replace(/[^\d\.\-]/g, '')
+    const s = v.replace(/[^\d.\-]/g, '')
     const n = Number(s)
-    return isFinite(n) ? n : 0
+    return Number.isFinite(n) ? n : 0
   }
   const n = Number(v)
-  return isFinite(n) ? n : 0
+  return Number.isFinite(n) ? n : 0
 }
-function pick(arr: Array<{variable: string; value: any}>, names: string[]) {
-  const lower = names.map(n => n.toLowerCase())
-  const hit = arr.find(x => lower.includes(String(x?.variable || '').toLowerCase()))
+
+function pick(arr: ReadonlyArray<FoxVar>, names: ReadonlyArray<string>) {
+  const lower = names.map((n) => n.toLowerCase())
+  const hit = arr.find((x) => lower.includes(String(x?.variable || '').toLowerCase()))
   return toNumber(hit?.value)
 }
-function pickByRegex(arr: Array<{variable: string; value: any}>, regs: RegExp[], agg: 'sum'|'max'='sum') {
+
+function pickByRegex(
+  arr: ReadonlyArray<FoxVar>,
+  regs: ReadonlyArray<RegExp>,
+  agg: 'sum' | 'max' = 'sum'
+) {
   const vals: number[] = []
   for (const r of regs) {
     for (const x of arr) {
@@ -84,14 +90,14 @@ function pickByRegex(arr: Array<{variable: string; value: any}>, regs: RegExp[],
     }
   }
   if (!vals.length) return 0
-  return agg === 'sum' ? vals.reduce((a,b)=>a+b,0) : Math.max(...vals)
+  return agg === 'sum' ? vals.reduce((a, b) => a + b, 0) : Math.max(...vals)
 }
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const wantDebug = url.searchParams.get('debug') === '1'
 
-  // cache (tylko gdy nie prosimy o debug)
+  // pamięciowy cache (nie dotyczy trybu debug)
   if (!wantDebug && g.__fox_live.payload && Date.now() - g.__fox_live.ts < LIVE_TTL_MS) {
     return new Response(JSON.stringify(g.__fox_live.payload, null, 2), {
       headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
@@ -108,31 +114,31 @@ export async function GET(req: NextRequest) {
       return new Response(JSON.stringify(payload, null, 2), { status: 400, headers: { 'content-type': 'application/json' } })
     }
 
-    // 1) szeroki zestaw nazw
-    const first = [
+    // szeroki zestaw zmiennych (tworzę zwykłe string[])
+    const first: string[] = [
       ...NAMES.pv,
-      'pv1power','pv2power','pv3power','pv4power',
-      ...NAMES.feed, ...NAMES.grid, 'loadspower','batpower'
+      'pv1power', 'pv2power', 'pv3power', 'pv4power',
+      ...NAMES.feed, ...NAMES.grid,
+      'loadspower', 'batpower'
     ]
     let vars = await realQuery(base, token, sn, first)
 
-    // 2) fallback – bez listy
+    // fallback – bez listy
     if (!vars.length) vars = await realQuery(base, token, sn)
 
     // heurystyki
     const pvCand = [
       pick(vars, NAMES.pv),
       pickByRegex(vars, NAMES.pvRegex, 'sum'),
-    ].filter(v => v>0)
+    ].filter((v) => v > 0)
     const pv_w = pvCand.length ? pvCand[0] : 0
 
     const feedRaw = pick(vars, NAMES.feed)
     const grid = pick(vars, NAMES.grid)
-    const feedin_w = feedRaw > 0 ? feedRaw : (grid < 0 ? -grid : 0)
+    const feedin_w = feedRaw > 0 ? feedRaw : grid < 0 ? -grid : 0
 
     const payload: LivePayload = { ok: true, pv_w, feedin_w, dbg: wantDebug ? { sample: vars.slice(0, 30) } : undefined }
     if (!wantDebug) g.__fox_live = { ts: Date.now(), payload }
-
     return new Response(JSON.stringify(payload, null, 2), {
       headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
     })
