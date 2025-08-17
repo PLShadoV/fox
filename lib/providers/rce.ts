@@ -1,138 +1,114 @@
 // lib/providers/rce.ts
-/**
- * Pobieranie RCE PLN z API PSE z fallbackami:
- * 1) v2 z filtrem po dacie (doba / business_date / udtczas / period_utc),
- * 2) v1 z tymi samymi wariantami,
- * 3) "bulk": pobranie ~ostatnich 2000 rekordów i wycięcie do potrzebnego zakresu.
- *
- * Zwraca Map<ISO_UTC_godziny, cenaPLN_MWh>.
- */
 const TZ = 'Europe/Warsaw'
+const API_BASE = 'https://api.raporty.pse.pl'
+const PATH = '/api/rce-pln'
 
-type RceRow = {
-  period_utc?: string
-  rce_pln?: number
-  udtczas_oreb?: string
-  doba?: string
-  business_date?: string
+type RceRow = { timestamp: string; pln_per_kwh: number }
+
+/** Pomocniczo: początek godziny (PL) → ISO */
+function isoForWarsawHour(y: number, m1: number, d: number, h: number) {
+  const seed = new Date(Date.UTC(y, m1, d, h))
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(seed)
+  const Y = Number(parts.find((p) => p.type === 'year')!.value)
+  const M = Number(parts.find((p) => p.type === 'month')!.value)
+  const D = Number(parts.find((p) => p.type === 'day')!.value)
+  const H = Number(parts.find((p) => p.type === 'hour')!.value)
+  return new Date(Date.UTC(Y, M - 1, D, H, 0, 0)).toISOString()
 }
 
-/* ---------------------- POMOCNICZE: dni w PL ---------------------- */
-
-function plDateString(dt: Date) {
-  const p = new Intl.DateTimeFormat('en-GB', {
+/** YYYY-MM-DD w strefie PL dla danego ISO */
+function ymdPL(iso: string) {
+  const d = new Date(iso)
+  const parts = new Intl.DateTimeFormat('en-CA', { // en-CA => YYYY-MM-DD
     timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(dt)
-  const get = (t: string) => p.find(x => x.type === t)!.value
-  return `${get('year')}-${get('month')}-${get('day')}` // YYYY-MM-DD
+  }).formatToParts(d)
+  const Y = parts.find(p => p.type === 'year')!.value
+  const M = parts.find(p => p.type === 'month')!.value
+  const D = parts.find(p => p.type === 'day')!.value
+  return `${Y}-${M}-${D}`
 }
 
-function enumerateDaysPL(fromISO: string, toISO: string): string[] {
+/** Mapowanie odpowiedzi /rce-pln na 24 wiersze godzinowe (PLN/kWh) */
+function mapRceValueToRows(obj: any): RceRow[] {
+  // Najczęstszy kształt: { value: [ { doba: 'YYYY-MM-DD', rce_pln: [PLN/MWh x24], ... } ] }
+  const rec = Array.isArray(obj?.value) ? obj.value[0] : null
+  if (rec && Array.isArray(rec.rce_pln) && rec.rce_pln.length) {
+    const [y, m, d] = String(rec.doba || rec.Date || '').split('-').map(Number)
+    const rows: RceRow[] = []
+    for (let h = 0; h < 24; h++) {
+      const plnMWh = Number(rec.rce_pln[h] ?? rec.RCE?.[h] ?? 0)
+      const plnPerKwh = isFinite(plnMWh) ? plnMWh / 1000 : 0
+      rows.push({ timestamp: isoForWarsawHour(y, (m || 1) - 1, d || 1, h), pln_per_kwh: plnPerKwh })
+    }
+    return rows
+  }
+
+  // Alternatywny kształt: value = tablica rekordów godzinowych { doba, oreb|period (1..24), rce_pln }
+  if (Array.isArray(obj?.value) && obj.value.length) {
+    const first = obj.value[0]
+    const [y, m, d] = String(first.doba || first.Date || '').split('-').map(Number)
+    const byHour: Record<number, number> = {}
+    for (const r of obj.value) {
+      const idx = Number(r.oreb ?? r.period ?? r.hour ?? 0) // 1..24
+      const plnMWh = Number(r.rce_pln ?? r.RCE ?? 0)
+      if (idx >= 1 && idx <= 24 && isFinite(plnMWh)) byHour[idx - 1] = plnMWh / 1000
+    }
+    const rows: RceRow[] = []
+    for (let h = 0; h < 24; h++) {
+      rows.push({ timestamp: isoForWarsawHour(y, (m || 1) - 1, d || 1, h), pln_per_kwh: byHour[h] ?? 0 })
+    }
+    return rows
+  }
+
+  throw new Error('Nieznany format odpowiedzi PSE /rce-pln')
+}
+
+/** Publiczne API – pobiera ceny RCE (PLN/kWh) dla zakresu from..to (obsługa doby/dób) */
+export async function fetchRceHourlyPln(fromISO: string, toISO: string): Promise<RceRow[]> {
+  // RCE jest publikowane per doba handlowa → iterujemy po dobach w strefie PL
+  const out: RceRow[] = []
   const start = new Date(fromISO)
   const end = new Date(toISO)
-  const days = new Set<string>()
-  for (let t = start.getTime(); t <= end.getTime(); t += 24 * 3600_000) {
-    days.add(plDateString(new Date(t)))
-  }
-  return [...days]
-}
 
-/* ---------------------- FETCH (różne warianty) ---------------------- */
-
-const COMMON_HEADERS: Record<string, string> = {
-  'accept': 'application/json',
-  'OData-Version': '4.0',
-  'OData-MaxVersion': '4.0',
-  // user-agent jak “normalna” przeglądarka – bywa, że serwer jest czuły
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117 Safari/537.36'
-}
-
-async function fetchJson(url: string) {
-  const res = await fetch(url, { headers: COMMON_HEADERS, cache: 'no-store' })
-  const text = await res.text()
-  if (!res.ok) {
-    return { ok: false as const, http: res.status, data: null as any }
-  }
-  try {
-    const data = JSON.parse(text)
-    return { ok: true as const, http: res.status, data }
-  } catch {
-    return { ok: false as const, http: res.status, data: null }
-  }
-}
-
-// Zwraca tablicę rekordów (value -> OData)
-function extractRows(x: any): RceRow[] {
-  if (!x) return []
-  if (Array.isArray(x)) return x as RceRow[]
-  if (Array.isArray(x.value)) return x.value as RceRow[]
-  return []
-}
-
-/* ---------------------- GŁÓWNE: pobieranie dnia ---------------------- */
-
-async function fetchRceDay(day: string): Promise<{ rows: RceRow[]; tried: Array<{api: string; url: string; ok: boolean; http: number; count: number}> }> {
-  const tried: Array<{api: string; url: string; ok: boolean; http: number; count: number}> = []
-
-  // kolejność prób – najpierw v2, potem v1, na końcu “bulk”
-  const variants: Array<{ api: string; url: string }> = [
-    // v2 – “czysta” doba
-    { api: 'v2', url: `https://api.raporty.pse.pl/api/rce-pln?$select=period_utc,rce_pln&$orderby=period_utc asc&$top=500&$filter=doba eq '${day}'` },
-    // v2 – business_date (bywa używane w przykładach)
-    { api: 'v2', url: `https://api.raporty.pse.pl/api/rce-pln?$select=period_utc,rce_pln&$orderby=period_utc asc&$top=500&$filter=business_date eq '${day}'` },
-    // v2 – po znaczniku czasu (tekstowo)
-    { api: 'v2', url: `https://api.raporty.pse.pl/api/rce-pln?$select=period_utc,rce_pln&$orderby=period_utc asc&$top=500&$filter=udtczas ge '${day} 00:00' and udtczas le '${day} 23:59'` },
-    // v2 – po period_utc (datetimeoffset)
-    { api: 'v2', url: `https://api.raporty.pse.pl/api/rce-pln?$select=period_utc,rce_pln&$orderby=period_utc asc&$top=500&$filter=period_utc ge datetimeoffset'${day}T00:00:00Z' and period_utc lt datetimeoffset'${day}T24:00:00Z'` },
-
-    // v1 – analogiczne filtry
-    { api: 'v1', url: `https://v1.api.raporty.pse.pl/api/rce-pln?$select=period_utc,rce_pln&$orderby=period_utc asc&$top=500&$filter=doba eq '${day}'` },
-    { api: 'v1', url: `https://v1.api.raporty.pse.pl/api/rce-pln?$select=period_utc,rce_pln&$orderby=period_utc asc&$top=500&$filter=udtczas_oreb ge '${day} 00:00' and udtczas_oreb le '${day} 23:59'` },
-    { api: 'v1', url: `https://v1.api.raporty.pse.pl/api/rce-pln?$select=period_utc,rce_pln&$orderby=period_utc asc&$top=500&$filter=period_utc ge datetimeoffset'${day}T00:00:00Z' and period_utc lt datetimeoffset'${day}T24:00:00Z'` },
-  ]
-
-  for (const v of variants) {
-    const r = await fetchJson(v.url)
-    const rows = r.ok ? extractRows(r.data) : []
-    tried.push({ api: v.api, url: v.url, ok: r.ok, http: r.http, count: rows.length })
-    if (r.ok && rows.length > 0) {
-      return { rows, tried }
-    }
+  // zrób listę dat YYYY-MM-DD w strefie PL
+  const dates = new Set<string>()
+  let cursor = new Date(start)
+  while (cursor < end) {
+    dates.add(ymdPL(cursor.toISOString()))
+    cursor.setUTCHours(cursor.getUTCHours() + 12) // przeskok w bezpieczny sposób
+    // normalizuj na północ PL danego dnia:
+    const ymd = ymdPL(cursor.toISOString()).split('-').map(Number)
+    cursor = new Date(Date.UTC(ymd[0], ymd[1]-1, ymd[2], 0,0,0))
   }
 
-  // BULK – ostatnie rekordy (oba hosty), potem filtr klientem
-  const bulkCandidates = [
-    { api: 'bulk', url: `https://api.raporty.pse.pl/api/rce-pln?$select=period_utc,rce_pln&$orderby=period_utc desc&$top=2000` },
-    { api: 'bulk', url: `https://v1.api.raporty.pse.pl/api/rce-pln?$select=period_utc,rce_pln&$orderby=period_utc desc&$top=2000` },
-  ]
-  for (const v of bulkCandidates) {
-    const r = await fetchJson(v.url)
-    const all = r.ok ? extractRows(r.data) : []
-    const rows = all.filter(x => typeof x.period_utc === 'string' && x.period_utc.startsWith(day))
-    tried.push({ api: v.api, url: v.url, ok: r.ok, http: r.http, count: rows.length })
-    if (r.ok && rows.length > 0) {
-      return { rows, tried }
-    }
+  for (const day of Array.from(dates.values())) {
+    const url = new URL(PATH, API_BASE)
+    url.searchParams.set('$filter', `doba eq '${day}'`)
+    const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' }, next: { revalidate: 300 } })
+    const text = await res.text()
+    if (!res.ok) throw new Error(`PSE RCE HTTP ${res.status} — ${text.slice(0,200)}`)
+    let json: any
+    try { json = JSON.parse(text) } catch { throw new Error(`PSE RCE zwrócił nie-JSON: ${text.slice(0,120)}`) }
+    const rows = mapRceValueToRows(json)
+    out.push(...rows)
   }
 
-  return { rows: [], tried }
-}
-
-/* --------------- API PUBLICZNE: zakres → Map<ISO, cena> --------------- */
-
-export async function fetchRcePlnMap(fromISO: string, toISO: string): Promise<Map<string, number>> {
-  const days = enumerateDaysPL(fromISO, toISO)
-  const out = new Map<string, number>()
-
-  for (const day of days) {
-    const { rows } = await fetchRceDay(day)
-    for (const r of rows) {
-      const iso = r.period_utc ? new Date(r.period_utc).toISOString() : ''
-      if (!iso) continue
-      const price = Number(r.rce_pln ?? 0)
-      out.set(iso, price) // uwaga: może być < 0 – tak właśnie chcemy (UI pokaże, revenue liczone z max(price,0))
-    }
-  }
-
+  // przefiltruj do żądanego przedziału
   return out
+    .filter(r => {
+      const t = new Date(r.timestamp).getTime()
+      return t >= new Date(fromISO).getTime() && t < new Date(toISO).getTime()
+    })
+    .sort((a,b) => a.timestamp.localeCompare(b.timestamp))
 }
+
+export default fetchRceHourlyPln

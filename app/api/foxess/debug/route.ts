@@ -5,7 +5,6 @@ import crypto from 'crypto'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// UŻYWAMY LITERALNEGO \r\n W PODPISIE
 function signatureHeaders(path: string, tokenRaw: string) {
   const token = (tokenRaw || '').trim()
   const timestamp = Date.now().toString()
@@ -64,11 +63,11 @@ export async function GET(_req: NextRequest) {
   const detailPath = '/op/v0/device/detail'
   const reportPath = '/op/v0/device/report/query'
 
-  // GET /device/detail?sn=... (podpis na samym PATH, bez query)
+  // GET /device/detail?sn=...
   const detailUrl = new URL(detailPath, base)
   if (sn) detailUrl.searchParams.set('sn', sn)
 
-  // POST /device/report/query (body jak w docs; podpis na PATH)
+  // POST /device/report/query
   const reportUrl = new URL(reportPath, base)
   const today = new Date()
   const body = {
@@ -87,12 +86,7 @@ export async function GET(_req: NextRequest) {
 
   return new Response(
     JSON.stringify(
-      {
-        env: { base, hasToken: !!token, sn },
-        tokenPreview: maskedToken,
-        detail,
-        report,
-      },
+      { env: { base, hasToken: !!token, sn }, tokenPreview: maskedToken, detail, report },
       null,
       2
     ),
