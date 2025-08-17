@@ -1,101 +1,121 @@
 // lib/providers/rce.ts
 /**
- * Pobiera ceny RCE z PSE (V2) i zwraca mapę: ISO godziny (UTC) -> cena [PLN/kWh].
- * API zwraca rce_pln w PLN/MWh, więc dzielimy przez 1000.
+ * Pobieranie RCE (PLN/kWh) z PSE v2.
+ * Strategia:
+ *  - filtrujemy po udtczas (lokalny czas, string) w formacie 'YYYY-MM-DD HH:mm'
+ *  - wybieramy i łączymy po period_utc (UTC, jedna wartość na godzinę)
+ *  - wynik zwracamy jako Map<ISO_UTC_godzina, cenaPLN>
  *
- * Kluczowe:
- *  - używamy filtra: $filter=doba eq 'YYYY-MM-DD'
- *  - spacje kodujemy jako %20 (nie '+'), bo inaczej serwer daje 400
- *  - godzinę bierzemy z period_utc (UTC, pasuje do naszych kluczy TS)
+ * Źródła pól (rce-pln): udtczas, udtczas_oreb, period_utc, rce_pln.
  */
 
-const BASE_V2 = process.env.RCE_API_BASE?.trim() || 'https://api.raporty.pse.pl'
+const API_BASE = process.env.RCE_API_BASE?.trim() || 'https://api.raporty.pse.pl/api'
 
-// Bezpieczny fetch JSON
-async function getJson(url: string) {
-  const res = await fetch(url, {
-    headers: { accept: 'application/json' },
-    // nie buforujemy długo – ceny mogą być publikowane z wyprzedzeniem
-    next: { revalidate: 300 },
-  })
-  const txt = await res.text()
-  if (!res.ok) {
-    throw new Error(`RCE HTTP ${res.status} – ${txt.slice(0, 200)}`)
-  }
-  try {
-    return JSON.parse(txt)
-  } catch {
-    throw new Error(`RCE: niepoprawny JSON (${txt.slice(0, 120)})`)
-  }
-}
+// -------------- pomocnicze: czas/strefa ---------------
 
-// YYYY-MM-DD z daty w PL (Europe/Warsaw)
-function ymdWarsaw(d: Date): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Warsaw',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+const TZ = 'Europe/Warsaw'
+
+function ymdPL(d: Date): string {
+  // zwraca 'YYYY-MM-DD' dla strefy PL
+  const p = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit'
   }).formatToParts(d)
-  const y = parts.find(p => p.type === 'year')!.value
-  const m = parts.find(p => p.type === 'month')!.value
-  const day = parts.find(p => p.type === 'day')!.value
-  return `${y}-${m}-${day}`
+  const get = (t: string) => p.find(x => x.type === t)!.value
+  return `${get('year')}-${get('month')}-${get('day')}`
 }
 
-// wszystkie dni (YYYY-MM-DD) między from..to liczone jako doby PL
-function listDaysWarsaw(fromISO: string, toISO: string): string[] {
-  // normalizujemy do północy PL
+function* daysPL(fromISO: string, toISO: string) {
+  // generator unikalnych dni (w sensie PL) w zadanym zakresie
+  const seen = new Set<string>()
   const start = new Date(fromISO)
   const end = new Date(toISO)
-  const days = new Set<string>()
-  for (let t = new Date(start.getTime()); t <= end; t.setUTCDate(t.getUTCDate() + 1)) {
-    days.add(ymdWarsaw(t))
+  for (let t = new Date(start); t <= end; t.setUTCDate(t.getUTCDate() + 1)) {
+    const key = ymdPL(t)
+    if (!seen.has(key)) {
+      seen.add(key)
+      yield key
+    }
   }
-  return Array.from(days)
 }
 
-// PSE V2: rce-pln dla jednego dnia (YYYY-MM-DD)
-async function fetchRceDayV2(dayYmd: string) {
-  // WAŻNE: budujemy parametry ręcznie, żeby spacje były %20
-  const filter = encodeURIComponent(`doba eq '${dayYmd}'`) // => doba%20eq%20'YYYY-MM-DD'
-  const order = encodeURIComponent('period_utc asc')
-  const url = `${BASE_V2}/api/rce-pln?$filter=${filter}&$orderby=${order}&$top=500`
+function isoHourUTC(d: Date) {
+  const x = new Date(d)
+  x.setUTCMinutes(0, 0, 0)
+  return x.toISOString()
+}
 
-  const json = await getJson(url)
+// -------------- cache dnia (żeby nie dobijać API) ---------------
+
+type DayCache = Map<string, { at: number; items: Array<{ iso: string; price: number }> }>
+const g = globalThis as any
+g.__rce_day_cache ||= new Map() as DayCache
+const DAY_TTL_MS = 60 * 60 * 1000 // 1h – bezpiecznie, bo PSE publikuje z wyprzedzeniem
+
+// -------------- fetch jednego dnia z v2 ---------------
+
+async function fetchRceDayV2(day: string) {
+  // filtrujemy stringowo po udtczas (lokalna), ale bierzemy period_utc do klucza
+  const params = new URLSearchParams()
+  params.set('$select', 'period_utc,rce_pln')
+  params.set('$orderby', 'period_utc asc')
+  params.set('$top', '500')
+  params.set('$filter', `udtczas ge '${day} 00:00' and udtczas le '${day} 23:59'`)
+  const url = `${API_BASE}/rce-pln?${params.toString()}`
+
+  const res = await fetch(url, {
+    // PSE lubi jawny JSON i brak cachowania po stronie node (my i tak cache’ujemy ręcznie)
+    headers: { 'Accept': 'application/json' },
+    // Next edge cache i tak ominie to, najważniejszy jest nasz cache in-memory
+    next: { revalidate: 0 }
+  })
+  if (!res.ok) {
+    throw new Error(`RCE v2 HTTP ${res.status}`)
+  }
+  const json: any = await res.json()
   const arr: any[] = Array.isArray(json?.value) ? json.value : []
-  return arr
+
+  const items: Array<{ iso: string; price: number }> = []
+  for (const row of arr) {
+    let ts = String(row.period_utc ?? row.udtczas_oreb ?? '')
+    if (!ts) continue
+
+    // ujednolicenie TS -> ISO (czasem bywa 'YYYY-MM-DD HH:mm', czasem ISO)
+    if (!ts.includes('T')) ts = ts.replace(' ', 'T')
+    if (!/Z$/.test(ts)) {
+      // jeżeli brak sufiksu – traktuj jako UTC (period_utc jest w UTC)
+      ts = ts + 'Z'
+    }
+    const d = new Date(ts)
+    if (isNaN(d.getTime())) continue
+
+    const price = Number(row.rce_pln ?? row.rce ?? row.price)
+    if (!isFinite(price)) continue
+
+    items.push({ iso: isoHourUTC(d), price })
+  }
+  return items
 }
 
-/**
- * Publiczne API:
- * Zwraca Map<ISO_UTC_godziny, cena_PLN_na_kWh>
- * (pokazujemy ujemne ceny, ale ich użycie do revenue jest w /api/data – tam robimy max(price, 0))
- */
+// -------------- API eksportowane: mapa godzin ---------------
+
 export async function fetchRcePlnMap(fromISO: string, toISO: string): Promise<Map<string, number>> {
   const out = new Map<string, number>()
-  const days = listDaysWarsaw(fromISO, toISO)
 
-  for (const day of days) {
-    let rows: any[] = []
-    try {
-      rows = await fetchRceDayV2(day)
-    } catch (e) {
-      // nie wysypujemy całego zakresu – po prostu omiń ten dzień
-      // (debug zostawiamy w logach Vercel)
-      console.warn('RCE day fetch failed', day, (e as Error)?.message)
+  for (const day of daysPL(fromISO, toISO)) {
+    // cache dnia
+    const hit = g.__rce_day_cache.get(day)
+    if (hit && Date.now() - hit.at < DAY_TTL_MS) {
+      for (const it of hit.items) out.set(it.iso, it.price)
       continue
     }
 
-    for (const r of rows) {
-      // preferuj period_utc (UTC), w ostateczności dtime_utc
-      const iso = r?.period_utc || r?.dtime_utc
-      if (!iso) continue
-      const ts = new Date(iso).toISOString()     // „klucz godziny” w UTC
-      const plnMWh = Number(r?.rce_pln ?? r?.rcePLN ?? r?.RCE_PLN ?? 0)
-      if (!isFinite(plnMWh)) continue
-      const plnKWh = plnMWh / 1000
-      out.set(ts, plnKWh)
+    try {
+      const items = await fetchRceDayV2(day)
+      g.__rce_day_cache.set(day, { at: Date.now(), items })
+      for (const it of items) out.set(it.iso, it.price)
+    } catch (e) {
+      // jeżeli dzień nie zwrócił danych – zostaw pusty (część dni może jeszcze nie być opublikowana)
+      g.__rce_day_cache.set(day, { at: Date.now(), items: [] })
     }
   }
 
