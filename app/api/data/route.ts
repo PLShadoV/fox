@@ -1,10 +1,11 @@
 // app/api/data/route.ts
 import type { NextRequest } from 'next/server';
 
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
-// (opcjonalnie) preferowane regiony — możesz usunąć, jeśli nie chcesz wymuszać:
-export const preferredRegion = ['waw1', 'fra1', 'arn1'] as const;
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+// podpowiedź dla Vercela gdzie uruchamiać funkcję (kolejność preferencji)
+export const preferredRegion = ['waw1', 'fra1', 'arn1'] as const
+
 
 const TZ = 'Europe/Warsaw';
 
