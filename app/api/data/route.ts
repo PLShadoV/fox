@@ -88,25 +88,39 @@ export async function GET(req: NextRequest) {
     const from = parseFlexible(searchParams.get('from'), 'start') || def.start
     const to   = parseFlexible(searchParams.get('to'),   'end')   || def.end
 
+    // sanity: jeśli użytkownik podał odwrócone granice – zamiana
+    if (new Date(from).getTime() > new Date(to).getTime()) {
+      const tmp = from
+      // @ts-expect-error reassign
+      from = to
+      // @ts-expect-error reassign
+      to = tmp
+    }
+
     const key = `${from}|${to}`
     const cached = g.__data_cache.get(key)
     if (cached && Date.now() - cached.ts < DATA_TTL_MS) {
       return new Response(JSON.stringify({ ok: true, rows: cached.rows, ...(wantDebug ? { stats: cached.stats } : {}) }, null, 2), {
         headers: {
           'content-type': 'application/json',
-          'cache-control': 's-maxage=30, stale-while-revalidate=15', // edge cache
+          'cache-control': 's-maxage=30, stale-while-revalidate=15',
         },
       })
     }
 
-    // 1) ENERGIA z FoxESS (bucket: godziny UTC odpowiadające godzinom PL)
+    // 1) ENERGIA z FoxESS – iteracja po dobach PL (redukuje dryf TZ/DST)
     const dayStarts = enumerateMidnightsPL(from, to)
     let energy: { ts: string; kwh: number }[] = []
     for (const dayStart of dayStarts) {
-      const endOfDay = new Date(new Date(dayStart).getTime() + 24*3600_000 - 1).toISOString()
-      const points = await fetchFoxEssHourlyExported(dayStart, endOfDay)
-      energy.push(...points.map(p => ({ ts: p.timestamp, kwh: Number(p.exported_kwh || 0) })))
+      const endOfDay = new Date(new Date(dayStart).getTime() + 24 * 3600_000 - 1).toISOString()
+      try {
+        const points = await fetchFoxEssHourlyExported(dayStart, endOfDay)
+        energy.push(...points.map(p => ({ ts: p.timestamp, kwh: Number(p.exported_kwh || 0) })))
+      } catch {
+        // pojedyncza doba padła – pomijamy, siatka godzin i tak będzie zapełniona zerami
+      }
     }
+    // utnij do zakresu i zbij do pełnych godzin UTC
     energy = energy.filter(e => {
       const t = new Date(e.ts).getTime()
       return t >= new Date(from).getTime() && t <= new Date(to).getTime()
@@ -117,26 +131,31 @@ export async function GET(req: NextRequest) {
       energyMap[k] = (energyMap[k] || 0) + e.kwh
     }
 
-    // 2) CENY RCE (mapa ISO_UTC -> PLN/kWh) – period_utc LUB udtczas_oreb
+    // 2) CENY RCE (Map<ISO_UTC -> PLN/kWh>) – odporny provider z fallbackami
     const rceMap = await fetchRcePlnMap(from, to)
 
-    // 3) siatka godzin od from..to (co 1h), merge + revenue=max(price,0)
+    // 3) Siatka godzin od from..to (co 1h), merge + revenue=max(price,0)
     const start = clampToHourUTC(new Date(from))
     const end   = clampToHourUTC(new Date(to))
     const rows: Row[] = []
     for (let t = new Date(start); t <= end; t.setUTCHours(t.getUTCHours() + 1)) {
       const keyHour = t.toISOString()
       const kwh = Number(energyMap[keyHour] || 0)
-      const price = Number(rceMap.get(keyHour) ?? 0)  // może być <0
-      const eff   = price < 0 ? 0 : price
+      const price = Number(rceMap.get(keyHour) ?? 0)  // może być < 0 (wyświetlamy), ale…
+      const eff   = price < 0 ? 0 : price             // …w revenue traktujemy ujemne jako 0
       rows.push({ ts: keyHour, kwh, price, revenue: +(kwh * eff).toFixed(6) })
     }
 
+    // 4) Statystyki (pomocne do sum w tabeli)
+    const sumKwh = rows.reduce((s, r) => s + r.kwh, 0)
+    const sumRevenue = rows.reduce((s, r) => s + r.revenue, 0)
     const stats = wantDebug ? {
       hoursEnergy: rows.reduce((s, r) => s + (r.kwh > 0 ? 1 : 0), 0),
       rceHits: rows.reduce((s, r) => s + (r.price !== 0 ? 1 : 0), 0),
       firstHour: rows[0]?.ts,
-      lastHour: rows[rows.length - 1]?.ts
+      lastHour: rows[rows.length - 1]?.ts,
+      sumKwh,
+      sumRevenue
     } : undefined
 
     g.__data_cache.set(key, { ts: Date.now(), rows, stats })

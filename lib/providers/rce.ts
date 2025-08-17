@@ -1,14 +1,15 @@
 // lib/providers/rce.ts
 /**
  * RCE (PLN/MWh) → Map<ISO_UTC_hour, PLN/kWh>
- * Odporne na zmiany pól czasu i filtry OData + fallback na v1 API.
+ * Odporne na zmiany pól czasu i filtry OData; jeden strzał na zakres; fallback v1 i „ostatnie 500”.
+ * Źródło pól: EndpointsMap.pdf (rce-pln: rce_pln, business_date/doba, period_utc/dtime_utc, udtczas/udtczas_oreb)
  */
 
-const PSE_BASE_V2 = process.env.PSE_API_BASE || 'https://api.raporty.pse.pl'
+const PSE_BASE_V2 = (process.env.PSE_API_BASE || 'https://api.raporty.pse.pl').replace(/\/+$/,'')
 const PSE_BASE_V1 = 'https://v1.api.raporty.pse.pl'
 const TZ = 'Europe/Warsaw'
 
-type RceRow = {
+export type RceRow = {
   rce_pln?: number
   business_date?: string
   doba?: string
@@ -18,10 +19,10 @@ type RceRow = {
   udtczas_oreb?: string
 }
 
-type Tried = { filter: string; url: string; count: number }
+type Tried = { base: string; filter: string; url: string; count: number }
 export type RceFetchDebug = {
-  day: string
-  bases: Array<{ base: string; tried: Tried[] }>
+  range: { fromISO: string; toISO: string; toExclusiveISO: string }
+  tried: Tried[]
 }
 
 /* ---------- pomocnicze: czas PL → UTC ---------- */
@@ -49,93 +50,52 @@ function ymdWarsaw(dateISO: string) {
   const D = parts.find(p => p.type === 'day')!.value
   return `${Y}-${M}-${D}`
 }
-function addDaysISO(iso: string, days: number) {
-  const d = new Date(iso); d.setUTCDate(d.getUTCDate() + days)
-  return d.toISOString()
+function nextDayYmd(ymd: string) {
+  const [Y,M,D] = ymd.split('-').map(Number)
+  const dt = new Date(Date.UTC(Y, M-1, D, 12))
+  dt.setUTCDate(dt.getUTCDate() + 1)
+  return dt.toISOString().slice(0,10)
 }
 
 /* ---------- budowa URL z ręcznym kodowaniem OData ---------- */
-function buildRceUrl(base: string, filter: string) {
-  const qs = [
-    // pobieramy maks info i prosty JSON
-    `$select=${encodeURIComponent([
-      'rce_pln',
-      'business_date','doba',
-      'period_utc','dtime_utc',
-      'udtczas','udtczas_oreb'
-    ].join(','))}`,
-    `$filter=${encodeURIComponent(filter)}`,
-    `$orderby=${encodeURIComponent('period_utc asc,dtime_utc asc,udtczas asc,udtczas_oreb asc')}`,
-    `$top=200`,
-    `$count=true`,
-    `$format=application/json`
-  ].join('&')
-  return `${base.replace(/\/+$/,'')}/api/rce-pln?${qs}`
+function buildUrl(base: string, filter?: string, top = 0) {
+  const params: string[] = []
+  params.push(`$select=${encodeURIComponent([
+    'rce_pln',
+    'business_date','doba',
+    'period_utc','dtime_utc',
+    'udtczas','udtczas_oreb'
+  ].join(','))}`)
+  if (filter) params.push(`$filter=${encodeURIComponent(filter)}`)
+  params.push(`$orderby=${encodeURIComponent('period_utc asc,dtime_utc asc,udtczas asc,udtczas_oreb asc')}`)
+  if (top > 0) params.push(`$top=${top}`)
+  params.push(`$count=true`)
+  params.push(`$format=application/json`)
+  return `${base}/api/rce-pln?${params.join('&')}`
 }
 
-async function fetchRceWithFilter(base: string, filter: string): Promise<{ rows: RceRow[]; tried: Tried }> {
-  const url = buildRceUrl(base, filter)
-  const res = await fetch(url, { headers: { 'accept': 'application/json' }, next: { revalidate: 1800 } })
+async function fetchRows(base: string, filter?: string, top = 0) {
+  const url = buildUrl(base, filter, top)
+  const res = await fetch(url, { headers: { accept: 'application/json' }, next: { revalidate: 1800 } })
   const txt = await res.text()
   let rows: any = []
   try {
     const json = JSON.parse(txt)
     rows = Array.isArray(json?.value) ? json.value : (Array.isArray(json) ? json : [])
-  } catch {
-    rows = []
-  }
-  return { rows, tried: { filter, url, count: Array.isArray(rows) ? rows.length : 0 } }
+  } catch { rows = [] }
+  return { url, rows: rows as RceRow[] }
 }
 
-/* ---------- jedna doba: wiele filtrów + zwrot debug ---------- */
-async function fetchRceDayFromBase(base: string, ymd: string) {
-  const filters: string[] = [
-    // 1) business_date jako date (bez cudzysłowów) i jako string
-    `(business_date eq ${ymd})`,
-    `(business_date eq '${ymd}')`,
-    // 2) doba (string)
-    `(doba eq '${ymd}')`,
-    // 3) zakresy czasowe po UTC
-    `(period_utc ge ${ymd}T00:00:00Z and period_utc lt ${ymd}T00:00:00Z add 1.00:00:00)`,
-    `(dtime_utc ge ${ymd}T00:00:00Z and dtime_utc lt ${ymd}T00:00:00Z add 1.00:00:00)`,
-    // 4) zakresy po lokalnym PL
-    `(udtczas ge '${ymd} 00:00' and udtczas le '${ymd} 23:59')`,
-    `(udtczas_oreb ge '${ymd} 00:00' and udtczas_oreb le '${ymd} 23:59')`,
-  ]
-
-  const tried: Tried[] = []
-  for (const f of filters) {
-    const { rows, tried: t } = await fetchRceWithFilter(base, f)
-    tried.push(t)
-    if (Array.isArray(rows) && rows.length) {
-      return { rows: rows as RceRow[], tried }
-    }
-  }
-  return { rows: [] as RceRow[], tried }
-}
-
-/** (eksport) – debug z obiema bazami */
-export async function debugRceDay(dayYmd: string): Promise<RceFetchDebug> {
-  const out: RceFetchDebug = { day: dayYmd, bases: [] }
-  // v2
-  const v2 = await fetchRceDayFromBase(PSE_BASE_V2, dayYmd)
-  out.bases.push({ base: PSE_BASE_V2, tried: v2.tried })
-  // v1
-  const v1 = await fetchRceDayFromBase(PSE_BASE_V1, dayYmd)
-  out.bases.push({ base: PSE_BASE_V1, tried: v1.tried })
-  return out
-}
-
-/** mapowanie wiersza na [ISO_UTC_godzina, PLN/kWh] */
-function mapRowToPoint(r: RceRow): [string, number] | null {
+/* ---------- mapowanie rekordu → [ISO_UTC_godzina, PLN/kWh] ---------- */
+function mapRow(r: RceRow): [string, number] | null {
   if (typeof r.rce_pln !== 'number') return null
   const priceKwh = r.rce_pln / 1000 // PLN/MWh → PLN/kWh
 
-  // Priorytet: gotowe UTC
+  // gotowe UTC:
   if (r.period_utc) return [new Date(r.period_utc).toISOString(), priceKwh]
   if (r.dtime_utc)  return [new Date(r.dtime_utc).toISOString(),  priceKwh]
 
-  // PL → UTC
+  // PL → UTC (hh z ciągu 'YYYY-MM-DD HH:mm')
   const asPL = (s?: string) => {
     if (!s) return null
     const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2})/)
@@ -145,44 +105,95 @@ function mapRowToPoint(r: RceRow): [string, number] | null {
   }
   const u1 = asPL(r.udtczas);      if (u1) return [u1, priceKwh]
   const u2 = asPL(r.udtczas_oreb); if (u2) return [u2, priceKwh]
-
   return null
 }
 
-/** główna: Map<ISO_UTC_hour, PLN/kWh>; próba v2 → fallback v1 */
-export async function fetchRcePlnMap(fromISO: string, toISO: string): Promise<Map<string, number>> {
-  if (!fromISO || !toISO) return new Map()
+/* ---------- GŁÓWNA: zakres → Map<ISO_UTC_hour, PLN/kWh> + debug ---------- */
+export async function fetchRcePlnMap(fromISO: string, toISO: string, wantDebug = false): Promise<Map<string, number>> {
+  const _dbg: Tried[] = []
+  const out = new Map<string, number>()
+  if (!fromISO || !toISO) return out
 
-  // zbiór dni PL w zakresie
-  const days: string[] = []
-  let cur = new Date(fromISO)
-  const end = new Date(toISO)
-  while (true) {
-    const ymd = ymdWarsaw(cur.toISOString())
-    if (!days.includes(ymd)) days.push(ymd)
-    if (ymd === ymdWarsaw(end.toISOString())) break
-    cur.setUTCDate(cur.getUTCDate() + 1)
-  }
+  // zbuduj końcówkę „exclusive”: < toExclusiveISO
+  // (jeśli toISO to 23:59:59.999 PL→UTC, dodaj 1ms, mamy bezpieczne „< koniec”)
+  const toExclusiveISO = new Date(new Date(toISO).getTime() + 1).toISOString()
+  const dayFrom = ymdWarsaw(fromISO)
+  const dayTo   = ymdWarsaw(toISO)
+  const dayAfterTo = nextDayYmd(dayTo)
 
-  // najpierw v2
-  let collected: RceRow[] = []
-  for (const d of days) {
-    const v2 = await fetchRceDayFromBase(PSE_BASE_V2, d)
-    if (v2.rows.length) collected.push(...v2.rows)
-  }
-  // fallback na v1 jeśli dalej nic
-  if (!collected.length) {
-    for (const d of days) {
-      const v1 = await fetchRceDayFromBase(PSE_BASE_V1, d)
-      if (v1.rows.length) collected.push(...v1.rows)
+  // 1) v2: precyzyjnie po UTC (period_utc, potem dtime_utc)
+  for (const [field, base] of [['period_utc', PSE_BASE_V2] as const, ['dtime_utc', PSE_BASE_V2] as const]) {
+    const filter = `(${field} ge ${fromISO.replace('Z','')}Z and ${field} lt ${toExclusiveISO.replace('Z','')}Z)`
+    const { url, rows } = await fetchRows(base, filter)
+    _dbg.push({ base, filter, url, count: rows.length })
+    if (rows.length) {
+      for (const r of rows) { const p = mapRow(r); if (p) out.set(p[0], p[1]) }
+      if (!wantDebug) return out
     }
   }
 
-  const out = new Map<string, number>()
-  for (const r of collected) {
-    const p = mapRowToPoint(r)
-    if (!p) continue
-    out.set(p[0], p[1])
+  // 2) v2: po dacie/PL (różne warianty)
+  const v2DateFilters = [
+    `(business_date eq ${dayFrom})`,
+    `(business_date eq '${dayFrom}')`,
+    `(doba eq '${dayFrom}')`,
+    `(udtczas ge '${dayFrom} 00:00' and udtczas lt '${dayAfterTo} 00:00')`,
+    `(udtczas_oreb ge '${dayFrom} 00:00' and udtczas_oreb lt '${dayAfterTo} 00:00')`,
+  ]
+  for (const filter of v2DateFilters) {
+    const { url, rows } = await fetchRows(PSE_BASE_V2, filter)
+    _dbg.push({ base: PSE_BASE_V2, filter, url, count: rows.length })
+    if (rows.length) {
+      for (const r of rows) { const p = mapRow(r); if (p) out.set(p[0], p[1]) }
+      if (!wantDebug) return out
+      break
+    }
   }
+
+  // 3) fallback v1 (ten sam zestaw filtrów co v2)
+  const v1Filters = [
+    `(${`period_utc ge ${fromISO.replace('Z','')}Z and period_utc lt ${toExclusiveISO.replace('Z','')}Z`})`,
+    `(${`dtime_utc ge ${fromISO.replace('Z','')}Z and dtime_utc lt ${toExclusiveISO.replace('Z','')}Z`})`,
+    `(business_date eq ${dayFrom})`,
+    `(business_date eq '${dayFrom}')`,
+    `(doba eq '${dayFrom}')`,
+    `(udtczas ge '${dayFrom} 00:00' and udtczas lt '${dayAfterTo} 00:00')`,
+    `(udtczas_oreb ge '${dayFrom} 00:00' and udtczas_oreb lt '${dayAfterTo} 00:00')`,
+  ]
+  for (const filter of v1Filters) {
+    const { url, rows } = await fetchRows(PSE_BASE_V1, filter)
+    _dbg.push({ base: PSE_BASE_V1, filter, url, count: rows.length })
+    if (rows.length) {
+      for (const r of rows) { const p = mapRow(r); if (p) out.set(p[0], p[1]) }
+      if (!wantDebug) return out
+      break
+    }
+  }
+
+  // 4) ostateczny fallback: ostatnie 500 bez filtra (v2, potem v1) + filtr po stronie serwera
+  if (out.size === 0) {
+    for (const base of [PSE_BASE_V2, PSE_BASE_V1]) {
+      const { url, rows } = await fetchRows(base, undefined, 500)
+      _dbg.push({ base, filter: '(no $filter, $top=500)', url, count: rows.length })
+      if (rows.length) {
+        for (const r of rows) {
+          const p = mapRow(r); if (!p) continue
+          const t = new Date(p[0]).getTime()
+          if (t >= new Date(fromISO).getTime() && t < new Date(toExclusiveISO).getTime()) {
+            out.set(p[0], p[1])
+          }
+        }
+        if (out.size) break
+      }
+    }
+  }
+
+  // opcjonalny globalny debug (do użycia z route debugującym)
+  ;(globalThis as any).__rce_dbg__ = { range: { fromISO, toISO, toExclusiveISO }, tried: _dbg }
   return out
+}
+
+/** Debug helper do route: zwróci listę prób z ostatniego wywołania powyżej */
+export function readLastRceDebug(): RceFetchDebug | null {
+  return (globalThis as any).__rce_dbg__ || null
 }
