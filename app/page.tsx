@@ -1,132 +1,212 @@
 'use client'
-import { useEffect, useMemo, useState } from 'react'
-import Card from '@/components/Card'
-import Tabs from '@/components/Tabs'
-import TimeChart from '@/components/TimeChart'
-import QuickRanges from '@/components/QuickRanges'
-import { mergeAndCalcRevenue, sumRevenue, aggregate, type Aggregate } from '@/lib/calc'
-import type { RevenuePoint } from '@/lib/types'
 
-function formatPLN(n: number) { return n.toLocaleString('pl-PL', { style: 'currency', currency: 'PLN' }) }
-function fmtHour(iso: string) { const d = new Date(iso); return d.toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' }) }
+import { useEffect, useMemo, useState } from 'react'
+import QuickRanges from '@/components/QuickRanges'
+import TimeChart from '@/components/TimeChart'
+
+type Row = {
+  ts: string          // ISO
+  kwh: number         // oddane kWh (godz.)
+  price?: number      // PLN/kWh z RCE
+  revenue?: number    // PLN dla godziny
+}
 
 export default function Page() {
-  const [from, setFrom] = useState(() => { const d = new Date(); d.setMinutes(0,0,0); d.setHours(d.getHours() - 24); return d.toISOString() })
-  const [to, setTo] = useState(() => new Date().toISOString())
-  const [rows, setRows] = useState<RevenuePoint[]>([])
-  const [agg, setAgg] = useState<Aggregate[]>([])
-  const [gran, setGran] = useState<'hour' | 'day' | 'week' | 'month' | 'year'>('hour')
-  const totals = useMemo(() => sumRevenue(rows), [rows])
+  const [range, setRange] = useState<{ from: string; to: string }>(() => {
+    const now = new Date()
+    const from = new Date(now); from.setHours(0, 0, 0, 0)
+    const to = new Date(now);   to.setHours(23, 59, 59, 999)
+    return { from: toLocalISO(from), to: toLocalISO(to) }
+  })
+  const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [live, setLive] = useState<{ pv_w: number; feedin_w: number } | null>(null)
 
-  async function load() {
-    setLoading(true); setError(null)
-    try {
-      const [eRes, pRes] = await Promise.all([
-        fetch(`/api/foxess?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
-        fetch(`/api/rce?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
-      ])
-      if (!eRes.ok) throw new Error(await eRes.text())
-      if (!pRes.ok) throw new Error(await pRes.text())
-      const energy = await eRes.json()
-      const prices = await pRes.json()
-      const merged = mergeAndCalcRevenue(energy, prices)
-      setRows(merged)
-      setAgg(aggregate(merged, gran))
-    } catch (e: any) {
-      setError(e.message ?? 'Błąd pobierania danych')
-    } finally { setLoading(false) }
-  }
+  // 👉 AUTO-FETCH po zmianie zakresu
+  useEffect(() => {
+    let ignore = false
+    async function load() {
+      setLoading(true)
+      try {
+        // ⬇️ Jeżeli masz inny endpoint, podmień tu ścieżkę:
+        const res = await fetch(`/api/data?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`, { cache: 'no-store' })
+        const json = await res.json()
+        if (!ignore) {
+          const list: Row[] = (json.rows ?? json.data ?? []).map((r: any) => ({
+            ts: r.ts ?? r.timestamp,
+            kwh: Number(r.kwh ?? r.exported_kwh ?? 0),
+            price: r.price ?? r.rce_pln ?? 0,
+            revenue: r.revenue ?? r.income ?? (Number(r.kwh ?? 0) * Number(r.price ?? 0)),
+          }))
+          setRows(list)
+        }
+      } catch (e) {
+        console.error(e)
+        if (!ignore) setRows([])
+      } finally {
+        if (!ignore) setLoading(false)
+      }
+    }
+    load()
+    return () => { ignore = true }
+  }, [range.from, range.to])
 
-  useEffect(() => { load() }, [])
-  useEffect(() => { setAgg(aggregate(rows, gran)) }, [gran, rows])
+  // Polling LIVE (obecna moc)
+  useEffect(() => {
+    let stop = false
+    async function tick() {
+      try {
+        const res = await fetch('/api/foxess/live', { cache: 'no-store' })
+        const json = await res.json()
+        if (!stop && json?.ok) setLive({ pv_w: json.pv_w, feedin_w: json.feedin_w })
+      } catch { /* ignore */ }
+      if (!stop) setTimeout(tick, 30000)
+    }
+    tick()
+    return () => { stop = true }
+  }, [])
+
+  // Suma zakresu
+  const totals = useMemo(() => {
+    return {
+      kwh: rows.reduce((s, r) => s + (Number(r.kwh) || 0), 0),
+      revenue: rows.reduce((s, r) => s + (Number(r.revenue) || 0), 0),
+    }
+  }, [rows])
+
+  // „Dziś do tej pory” – sumujemy zakończone godziny dzisiejszego dnia
+  const todaySoFar = useMemo(() => {
+    const now = new Date()
+    const todayStr = now.toLocaleDateString('pl-PL')
+    const cutHour = now.getHours()
+    const sum = rows.reduce((s, r) => {
+      const d = new Date(r.ts)
+      const sameDay = d.toLocaleDateString('pl-PL') === todayStr
+      if (!sameDay) return s
+      const hr = d.getHours()
+      return s + (hr < cutHour ? (Number(r.kwh) || 0) : 0)
+    }, 0)
+    return sum
+  }, [rows])
 
   return (
-    <main>
-      <Card title="Podsumowanie" action={<button className="btn" onClick={load} disabled={loading}>{loading ? 'Ładowanie…' : 'Odśwież'}</button>}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="card">
-            <div className="text-slate-300 text-sm mb-1">Oddane kWh (zakres)</div>
-            <div className="stat">{totals.total_kwh} kWh</div>
+    <main className="p-4 md:p-6 space-y-6">
+      {/* Kafelki podsumowania */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card title="Oddane kWh (zakres)">
+          <Big>{fmt(totals.kwh, 1)} kWh</Big>
+        </Card>
+        <Card title="Przychód (RCE)">
+          <Big>{fmt(totals.revenue, 2)} zł</Big>
+        </Card>
+        <Card title="Obecna moc (PV)">
+          <Big>{live ? `${Math.round(live.pv_w).toLocaleString('pl-PL')} W` : '—'}</Big>
+        </Card>
+        <Card title="Dziś do tej pory">
+          <Big>{fmt(todaySoFar, 2)} kWh</Big>
+        </Card>
+      </div>
+
+      {/* Szybkie zakresy – bez przycisku Odśwież */}
+      <QuickRanges value={range} onChange={setRange} className="mb-2" />
+
+      {/* Tabela (w miejscu starego „wykresu przychodów”) */}
+      <div className="rounded-2xl bg-slate-900/40 p-4 shadow">
+        {/* Kontrolki dat przy tabeli */}
+        <div className="flex flex-wrap items-end gap-3 mb-3">
+          <div>
+            <label className="block text-sm opacity-80 mb-1">Od</label>
+            <input
+              type="datetime-local"
+              value={toLocalInput(range.from)}
+              onChange={e => setRange(r => ({ ...r, from: fromLocalInput(e.target.value) }))}
+              className="bg-slate-800 rounded px-2 py-1"
+            />
           </div>
-          <div className="card">
-            <div className="text-slate-300 text-sm mb-1">Przychód (RCE)</div>
-            <div className="stat">{formatPLN(totals.total_pln)}</div>
-          </div>
-          <div className="card">
-            <div className="text-slate-300 text-sm mb-1">Zakres</div>
-            <div className="stat"><span className="badge">od</span> {fmtHour(from)} <span className="badge ml-2">do</span> {fmtHour(to)}</div>
+          <div>
+            <label className="block text-sm opacity-80 mb-1">Do</label>
+            <input
+              type="datetime-local"
+              value={toLocalInput(range.to)}
+              onChange={e => setRange(r => ({ ...r, to: fromLocalInput(e.target.value) }))}
+              className="bg-slate-800 rounded px-2 py-1"
+            />
           </div>
         </div>
-      </Card>
 
-      <Card title="Szybkie zakresy">
-        <QuickRanges onPick={(f,t)=>{ setFrom(f); setTo(t); }} />
-      </Card>
-
-      <Card title="Wykres przychodów">
-        <div className="mb-4">
-          <Tabs
-            value={gran}
-            onChange={(v) => setGran(v as any)}
-            items={[
-              { value: 'hour', label: 'Godziny' },
-              { value: 'day', label: 'Dni' },
-              { value: 'week', label: 'Tygodnie' },
-              { value: 'month', label: 'Miesiące' },
-              { value: 'year', label: 'Lata' },
-            ]}
-          />
-        </div>
-        <TimeChart data={agg.map(a => ({ x: a.label, y: a.revenue_pln }))} yLabel="Przychód [PLN]" />
-      </Card>
-
-      <Card title="Wykres energii (kWh)">
-        <TimeChart data={agg.map(a => ({ x: a.label, y: a.exported_kwh }))} yLabel="Oddane [kWh]" />
-      </Card>
-
-      <Card title="Godzina po godzinie">
-        {error && <div className="mb-3 text-red-300">{error}</div>}
         <div className="overflow-x-auto">
-          <table className="table">
-            <thead>
+          <table className="w-full text-sm">
+            <thead className="text-left opacity-80">
               <tr>
-                <th>Czas</th>
-                <th>Oddane [kWh]</th>
-                <th>Cena [PLN/kWh]</th>
-                <th>Przychód [PLN]</th>
+                <th className="py-2">Godzina</th>
+                <th className="py-2 text-right">kWh</th>
+                <th className="py-2 text-right">Cena (PLN/kWh)</th>
+                <th className="py-2 text-right">Przychód (PLN)</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.timestamp}>
-                  <td className="whitespace-nowrap">{fmtHour(r.timestamp)}</td>
-                  <td>{r.exported_kwh.toFixed(3)}</td>
-                  <td>{r.price_pln_per_kwh.toFixed(4)}</td>
-                  <td>{r.revenue_pln.toFixed(2)}</td>
+              {rows.map((r, i) => (
+                <tr key={i} className="border-t border-slate-800/60">
+                  <td className="py-2">{fmtHour(r.ts)}</td>
+                  <td className="py-2 text-right">{fmt(r.kwh, 3)}</td>
+                  <td className="py-2 text-right">{fmt(r.price ?? 0, 3)}</td>
+                  <td className="py-2 text-right">{fmt(r.revenue ?? 0, 2)}</td>
                 </tr>
               ))}
             </tbody>
+            <tfoot className="border-t-2 border-slate-700">
+              <tr>
+                <td className="py-2 font-semibold">Suma</td>
+                <td className="py-2 text-right font-semibold">{fmt(totals.kwh, 2)} kWh</td>
+                <td></td>
+                <td className="py-2 text-right font-semibold">{fmt(totals.revenue, 2)} zł</td>
+              </tr>
+            </tfoot>
           </table>
         </div>
-      </Card>
 
-      <Card title="Ustawienia zakresu">
-        <div className="grid gap-3 md:grid-cols-3">
-          <label className="flex flex-col gap-1">
-            <span className="sub">Od (ISO)</span>
-            <input className="btn" value={from} onChange={e => setFrom(e.target.value)} />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="sub">Do (ISO)</span>
-            <input className="btn" value={to} onChange={e => setTo(e.target.value)} />
-          </label>
-          <div className="flex items-end">
-            <button className="btn" onClick={load} disabled={loading}>Przelicz</button>
-          </div>
-        </div>
-      </Card>
+        {loading && <div className="opacity-70 mt-3">Ładowanie…</div>}
+      </div>
+
+      {/* Zostawiamy jeden wykres – energii (kWh) */}
+      <TimeChart data={rows.map(r => ({ ts: r.ts, kwh: Number(r.kwh || 0) }))} />
     </main>
   )
+}
+
+/* ————— helpers ————— */
+
+function Card({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-2xl bg-slate-900/40 p-4 shadow">
+      <div className="opacity-80 text-sm">{title}</div>
+      {children}
+    </div>
+  )
+}
+function Big({ children }: { children: React.ReactNode }) {
+  return <div className="text-3xl font-semibold mt-1">{children}</div>
+}
+
+function fmt(n: number, frac = 2) {
+  return (n ?? 0).toLocaleString('pl-PL', { maximumFractionDigits: frac })
+}
+function fmtHour(ts: string) {
+  const d = new Date(ts)
+  return d.toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+function toLocalISO(d: Date) {
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString()
+}
+function toLocalInput(iso: string) {
+  const d = new Date(iso)
+  const pad = (x: number) => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
+    d.getMinutes()
+  )}`
+}
+function fromLocalInput(v: string) {
+  // traktujemy input jako lokalny czas
+  const d = new Date(v)
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString()
 }
