@@ -6,11 +6,11 @@ import { fetchRcePlnHourly } from '@/lib/providers/rce'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-// cache 60s po kluczu zakresu
-type Rows = Array<{ ts: string; kwh: number; price: number; revenue: number }>
+// cache 60 s po kluczu zakresu
+type Row = { ts: string; kwh: number; price: number; revenue: number }
 const DATA_TTL_MS = 60_000
 const g = globalThis as any
-g.__data_cache ||= new Map<string, { ts: number; rows: Rows }>()
+g.__data_cache ||= new Map<string, { ts: number; rows: Row[]; meta?: any }>()
 
 function partsPL(date: Date) {
   const p = new Intl.DateTimeFormat('en-GB', {
@@ -48,16 +48,17 @@ export async function GET(req: NextRequest) {
     const def = dayBoundsPL(now)
     const from = searchParams.get('from') || def.start
     const to   = searchParams.get('to')   || def.end
+    const debug = searchParams.get('debug')
 
     const key = `${from}|${to}`
     const cached = g.__data_cache.get(key)
     if (cached && Date.now() - cached.ts < DATA_TTL_MS) {
-      return new Response(JSON.stringify({ ok: true, rows: cached.rows }, null, 2), {
+      return new Response(JSON.stringify({ ok: true, rows: cached.rows, meta: cached.meta }, null, 2), {
         headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
       })
     }
 
-    // 1) Energia z FoxESS (zbieramy dzień po dniu w PL)
+    // 1) energia z FoxESS (dzień po dniu)
     const dayStarts = enumerateMidnightsPL(from, to)
     let energy: { ts: string; kwh: number }[] = []
     for (const dayStart of dayStarts) {
@@ -68,18 +69,19 @@ export async function GET(req: NextRequest) {
     energy = clamp(energy, from, to)
     energy.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
 
-    // 2) Ceny RCE (PLN/kWh) dla tego samego zakresu
+    // 2) ceny RCE dla tego samego zakresu
     const rce = await fetchRcePlnHourly(from, to) // Map<ISOhour, PLN/kWh>
 
-    // 3) Merge
-    const rows: Rows = energy.map(e => {
+    // 3) merge
+    const rows: Row[] = energy.map(e => {
       const price = rce.get(e.ts) ?? 0
-      const revenue = price * e.kwh
-      return { ts: e.ts, kwh: e.kwh, price, revenue }
+      return { ts: e.ts, kwh: e.kwh, price, revenue: price * e.kwh }
     })
 
-    g.__data_cache.set(key, { ts: Date.now(), rows })
-    return new Response(JSON.stringify({ ok: true, rows }, null, 2), {
+    const meta = debug ? { rceKeys: rce.size, sampleTs: rows.slice(0, 3).map(r => r.ts) } : undefined
+    g.__data_cache.set(key, { ts: Date.now(), rows, meta })
+
+    return new Response(JSON.stringify({ ok: true, rows, meta }, null, 2), {
       headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
     })
   } catch (e: any) {
