@@ -1,23 +1,21 @@
 // app/api/data/route.ts
 import type { NextRequest } from 'next/server';
 
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'
-// podpowiedź dla Vercela gdzie uruchamiać funkcję (kolejność preferencji)
-export const preferredRegion = ['waw1', 'fra1', 'arn1'] as const
-
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+// ✅ ważne: zwykła tablica stringów (bez `as const`)
+export const preferredRegion: string[] = ['waw1', 'fra1', 'arn1'];
 
 const TZ = 'Europe/Warsaw';
 
 type HourRow = {
-  timestamp: string;            // ISO (początek godziny w czasie UTC odpowiadający czasu PL)
-  exported_kwh: number;         // z FoxESS
-  rce_pln_per_kwh?: number;     // z RCE (PLN/kWh)
-  revenue_pln?: number;         // exported_kwh * rce_pln_per_kwh
+  timestamp: string;
+  exported_kwh: number;
+  rce_pln_per_kwh?: number;
+  revenue_pln?: number;
 };
 
 function isoForWarsawHour(y: number, m1: number, d: number, h: number) {
-  // tworzymy chwilę "y-m-d h:00" w strefie PL jako moment UTC
   const seed = new Date(Date.UTC(y, m1, d, h));
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: TZ,
@@ -44,7 +42,6 @@ function parseRange(req: NextRequest): { fromISO: string; toISO: string } {
 
   if (fromQ && toQ) return { fromISO: new Date(fromQ).toISOString(), toISO: new Date(toQ).toISOString() };
 
-  // domyślnie: wczorajsza doba w czasie PL
   const now = new Date();
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: TZ,
@@ -56,15 +53,13 @@ function parseRange(req: NextRequest): { fromISO: string; toISO: string } {
   let Y = Number(parts.find((p) => p.type === 'year')!.value);
   let M = Number(parts.find((p) => p.type === 'month')!.value);
   let D = Number(parts.find((p) => p.type === 'day')!.value);
-  // cofamy jeden dzień w kalendarzu PL:
-  const dLocal = new Date(Date.UTC(Y, M - 1, D, 12)); // południe, żeby bezpiecznie odjąć 1 dzień
+  const dLocal = new Date(Date.UTC(Y, M - 1, D, 12));
   dLocal.setUTCDate(dLocal.getUTCDate() - 1);
   Y = dLocal.getUTCFullYear();
   M = dLocal.getUTCMonth() + 1;
   D = dLocal.getUTCDate();
 
   const fromISO = isoForWarsawHour(Y, M - 1, D, 0);
-  // toISO = początek następnego dnia (PL)
   const toISO = isoForWarsawHour(Y, M - 1, D + 1, 0);
   return { fromISO, toISO };
 }
@@ -79,16 +74,15 @@ export async function GET(req: NextRequest) {
   // FOXESS
   try {
     const mod = await import('@/lib/providers/foxess');
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const { fetchFoxEssHourlyExported } = mod as any;
     foxess = await fetchFoxEssHourlyExported(fromISO, toISO);
   } catch (e: any) {
     errors.foxess = e?.message || String(e);
   }
 
-  // RCE (opcjonalnie – jeśli nie masz providera, zignorujemy błąd)
+  // RCE (opcjonalnie)
   try {
-    // @ts-ignore – provider może nie istnieć w niektórych wdrożeniach
+    // @ts-ignore – provider może nie istnieć
     const rceMod = await import('@/lib/providers/rce').catch(() => null as any);
     if (rceMod) {
       const fn =
@@ -104,7 +98,6 @@ export async function GET(req: NextRequest) {
     errors.rce = e?.message || String(e);
   }
 
-  // Zbijamy do mapy po timestamp
   const map = new Map<string, HourRow>();
   for (const p of foxess) {
     map.set(p.timestamp, { timestamp: p.timestamp, exported_kwh: Number(p.exported_kwh) || 0 });
@@ -125,10 +118,7 @@ export async function GET(req: NextRequest) {
     map.set(ts, row);
   }
 
-  // Posortowana tabela godzinowa
   const hourly = Array.from(map.values()).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-
-  // Sumarne
   const totals = hourly.reduce(
     (acc, r) => {
       acc.exported_kwh += r.exported_kwh || 0;
