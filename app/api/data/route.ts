@@ -1,13 +1,12 @@
 // app/api/data/route.ts
 import { NextRequest } from 'next/server'
 import { fetchFoxEssHourlyExported } from '@/lib/providers/foxess'
-import { fetchRcePlnMap } from '@/lib/providers/rce' // ⬅️ UPEWNIJ SIĘ, ŻE TO TEN IMPORT
+import { fetchRcePlnMap } from '@/lib/providers/rce'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 type Row = { ts: string; kwh: number; price: number; revenue: number }
-
 const TZ = 'Europe/Warsaw'
 
 /* ----------------------- CZAS: PL -> UTC (z DST) ----------------------- */
@@ -72,9 +71,9 @@ function clampToHourUTC(d: Date) {
   const c = new Date(d); c.setUTCMinutes(0,0,0); return c
 }
 
-/* --------------------------- CACHE na 60 s --------------------------- */
+/* --------------------------- CACHE: 30 s --------------------------- */
 type CacheEntry = { ts: number; rows: Row[]; stats?: any }
-const DATA_TTL_MS = 60_000
+const DATA_TTL_MS = 30_000 // ⬅️ odświeżanie co 30 s
 const g = globalThis as any
 g.__data_cache ||= new Map<string, CacheEntry>()
 
@@ -93,7 +92,10 @@ export async function GET(req: NextRequest) {
     const cached = g.__data_cache.get(key)
     if (cached && Date.now() - cached.ts < DATA_TTL_MS) {
       return new Response(JSON.stringify({ ok: true, rows: cached.rows, ...(wantDebug ? { stats: cached.stats } : {}) }, null, 2), {
-        headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
+        headers: {
+          'content-type': 'application/json',
+          'cache-control': 's-maxage=30, stale-while-revalidate=15', // edge cache
+        },
       })
     }
 
@@ -105,7 +107,6 @@ export async function GET(req: NextRequest) {
       const points = await fetchFoxEssHourlyExported(dayStart, endOfDay)
       energy.push(...points.map(p => ({ ts: p.timestamp, kwh: Number(p.exported_kwh || 0) })))
     }
-    // do zakresu
     energy = energy.filter(e => {
       const t = new Date(e.ts).getTime()
       return t >= new Date(from).getTime() && t <= new Date(to).getTime()
@@ -116,19 +117,19 @@ export async function GET(req: NextRequest) {
       energyMap[k] = (energyMap[k] || 0) + e.kwh
     }
 
-    // 2) CENY RCE (mapa ISO_UTC -> PLN/kWh) – period_utc + business_date
+    // 2) CENY RCE (mapa ISO_UTC -> PLN/kWh) – period_utc LUB udtczas_oreb
     const rceMap = await fetchRcePlnMap(from, to)
 
-    // 3) pełna siatka godzin od from..to (co 1h), merge + revenue=max(price,0)
+    // 3) siatka godzin od from..to (co 1h), merge + revenue=max(price,0)
     const start = clampToHourUTC(new Date(from))
     const end   = clampToHourUTC(new Date(to))
     const rows: Row[] = []
     for (let t = new Date(start); t <= end; t.setUTCHours(t.getUTCHours() + 1)) {
-      const key = t.toISOString()
-      const kwh = Number(energyMap[key] || 0)
-      const price = Number(rceMap.get(key) ?? 0)    // może być ujemna
-      const eff   = price < 0 ? 0 : price           // przychód z obciętą do 0
-      rows.push({ ts: key, kwh, price, revenue: +(kwh * eff).toFixed(6) })
+      const keyHour = t.toISOString()
+      const kwh = Number(energyMap[keyHour] || 0)
+      const price = Number(rceMap.get(keyHour) ?? 0)  // może być <0
+      const eff   = price < 0 ? 0 : price
+      rows.push({ ts: keyHour, kwh, price, revenue: +(kwh * eff).toFixed(6) })
     }
 
     const stats = wantDebug ? {
@@ -140,7 +141,10 @@ export async function GET(req: NextRequest) {
 
     g.__data_cache.set(key, { ts: Date.now(), rows, stats })
     return new Response(JSON.stringify({ ok: true, rows, ...(wantDebug ? { stats } : {}) }, null, 2), {
-      headers: { 'content-type': 'application/json', 'cache-control': 's-maxage=60, stale-while-revalidate=30' },
+      headers: {
+        'content-type': 'application/json',
+        'cache-control': 's-maxage=30, stale-while-revalidate=15',
+      },
     })
   } catch (e: any) {
     return new Response(JSON.stringify({ ok: false, error: e?.message || 'data error' }, null, 2), {
