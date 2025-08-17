@@ -63,33 +63,19 @@ export async function GET(_req: NextRequest) {
   const detailPath = '/op/v0/device/detail'
   const reportPath = '/op/v0/device/report/query'
 
-  // GET /device/detail?sn=...
   const detailUrl = new URL(detailPath, base)
   if (sn) detailUrl.searchParams.set('sn', sn)
 
-  // POST /device/report/query
   const reportUrl = new URL(reportPath, base)
   const today = new Date()
-  const body = {
-    sn,
-    year: today.getUTCFullYear(),
-    month: today.getUTCMonth() + 1,
-    day: today.getUTCDate(),
-    dimension: 'day',
-    variables: ['feedin'],
-  }
+  const body = { sn, year: today.getUTCFullYear(), month: today.getUTCMonth() + 1, day: today.getUTCDate(), dimension: 'day', variables: ['feedin'] }
 
   const detail = await callGet(detailUrl, detailPath, token)
   const report = await callPost(reportUrl, reportPath, token, body)
 
   const maskedToken = token ? `${token.slice(0, 4)}...${token.slice(-4)} (${token.length} chars)` : ''
 
-  return new Response(
-    JSON.stringify(
-      { env: { base, hasToken: !!token, sn }, tokenPreview: maskedToken, detail, report },
-      null,
-      2
-    ),
-    { headers: { 'content-type': 'application/json' } }
-  )
+  return new Response(JSON.stringify({ env: { base, hasToken: !!token, sn }, tokenPreview: maskedToken, detail, report }, null, 2), {
+    headers: { 'content-type': 'application/json' }
+  })
 }

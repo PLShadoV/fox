@@ -5,110 +5,94 @@ const PATH = '/api/rce-pln'
 
 type RceRow = { timestamp: string; pln_per_kwh: number }
 
-/** Pomocniczo: początek godziny (PL) → ISO */
+/** ISO PL hour */
 function isoForWarsawHour(y: number, m1: number, d: number, h: number) {
   const seed = new Date(Date.UTC(y, m1, d, h))
   const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
   }).formatToParts(seed)
-  const Y = Number(parts.find((p) => p.type === 'year')!.value)
-  const M = Number(parts.find((p) => p.type === 'month')!.value)
-  const D = Number(parts.find((p) => p.type === 'day')!.value)
-  const H = Number(parts.find((p) => p.type === 'hour')!.value)
+  const Y = Number(parts.find(p => p.type === 'year')!.value)
+  const M = Number(parts.find(p => p.type === 'month')!.value)
+  const D = Number(parts.find(p => p.type === 'day')!.value)
+  const H = Number(parts.find(p => p.type === 'hour')!.value)
   return new Date(Date.UTC(Y, M - 1, D, H, 0, 0)).toISOString()
 }
 
-/** YYYY-MM-DD w strefie PL dla danego ISO */
-function ymdPL(iso: string) {
-  const d = new Date(iso)
-  const parts = new Intl.DateTimeFormat('en-CA', { // en-CA => YYYY-MM-DD
-    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(d)
-  const Y = parts.find(p => p.type === 'year')!.value
-  const M = parts.find(p => p.type === 'month')!.value
-  const D = parts.find(p => p.type === 'day')!.value
-  return `${Y}-${M}-${D}`
+async function fetchDay(field: 'Date' | 'doba', day: string) {
+  const url = new URL(PATH, API_BASE)
+  url.searchParams.set('$filter', `${field} eq '${day}'`)
+  const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' }, next: { revalidate: 300 } })
+  const txt = await res.text()
+  return { ok: res.ok, status: res.status, txt }
 }
 
-/** Mapowanie odpowiedzi /rce-pln na 24 wiersze godzinowe (PLN/kWh) */
-function mapRceValueToRows(obj: any): RceRow[] {
-  // Najczęstszy kształt: { value: [ { doba: 'YYYY-MM-DD', rce_pln: [PLN/MWh x24], ... } ] }
-  const rec = Array.isArray(obj?.value) ? obj.value[0] : null
-  if (rec && Array.isArray(rec.rce_pln) && rec.rce_pln.length) {
-    const [y, m, d] = String(rec.doba || rec.Date || '').split('-').map(Number)
+function mapJsonToRows(json: any, y: number, m: number, d: number): RceRow[] {
+  // shape 1: value[0].rce_pln = [24 * PLN/MWh]
+  if (Array.isArray(json?.value) && json.value.length && Array.isArray(json.value[0]?.rce_pln)) {
+    const arr = json.value[0].rce_pln
     const rows: RceRow[] = []
     for (let h = 0; h < 24; h++) {
-      const plnMWh = Number(rec.rce_pln[h] ?? rec.RCE?.[h] ?? 0)
-      const plnPerKwh = isFinite(plnMWh) ? plnMWh / 1000 : 0
-      rows.push({ timestamp: isoForWarsawHour(y, (m || 1) - 1, d || 1, h), pln_per_kwh: plnPerKwh })
+      const plnMWh = Number(arr[h] ?? 0)
+      rows.push({ timestamp: isoForWarsawHour(y, m - 1, d, h), pln_per_kwh: isFinite(plnMWh) ? plnMWh / 1000 : 0 })
     }
     return rows
   }
-
-  // Alternatywny kształt: value = tablica rekordów godzinowych { doba, oreb|period (1..24), rce_pln }
-  if (Array.isArray(obj?.value) && obj.value.length) {
-    const first = obj.value[0]
-    const [y, m, d] = String(first.doba || first.Date || '').split('-').map(Number)
+  // shape 2: value = hourly records
+  if (Array.isArray(json?.value)) {
     const byHour: Record<number, number> = {}
-    for (const r of obj.value) {
+    for (const r of json.value) {
       const idx = Number(r.oreb ?? r.period ?? r.hour ?? 0) // 1..24
       const plnMWh = Number(r.rce_pln ?? r.RCE ?? 0)
       if (idx >= 1 && idx <= 24 && isFinite(plnMWh)) byHour[idx - 1] = plnMWh / 1000
     }
     const rows: RceRow[] = []
-    for (let h = 0; h < 24; h++) {
-      rows.push({ timestamp: isoForWarsawHour(y, (m || 1) - 1, d || 1, h), pln_per_kwh: byHour[h] ?? 0 })
-    }
+    for (let h = 0; h < 24; h++) rows.push({ timestamp: isoForWarsawHour(y, m - 1, d, h), pln_per_kwh: byHour[h] ?? 0 })
     return rows
   }
-
-  throw new Error('Nieznany format odpowiedzi PSE /rce-pln')
+  return []
 }
 
-/** Publiczne API – pobiera ceny RCE (PLN/kWh) dla zakresu from..to (obsługa doby/dób) */
+/** Publiczne API – RCE PLN/kWh dla zakresu (iteracja po dobach PL) */
 export async function fetchRceHourlyPln(fromISO: string, toISO: string): Promise<RceRow[]> {
-  // RCE jest publikowane per doba handlowa → iterujemy po dobach w strefie PL
   const out: RceRow[] = []
   const start = new Date(fromISO)
   const end = new Date(toISO)
 
-  // zrób listę dat YYYY-MM-DD w strefie PL
-  const dates = new Set<string>()
-  let cursor = new Date(start)
-  while (cursor < end) {
-    dates.add(ymdPL(cursor.toISOString()))
-    cursor.setUTCHours(cursor.getUTCHours() + 12) // przeskok w bezpieczny sposób
-    // normalizuj na północ PL danego dnia:
-    const ymd = ymdPL(cursor.toISOString()).split('-').map(Number)
-    cursor = new Date(Date.UTC(ymd[0], ymd[1]-1, ymd[2], 0,0,0))
+  // Zbuduj listę dni YYYY-MM-DD (PL)
+  const dates: string[] = []
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' })
+  let cur = new Date(start)
+  while (cur < end) {
+    const parts = fmt.formatToParts(cur)
+    const Y = parts.find(p => p.type === 'year')!.value
+    const M = parts.find(p => p.type === 'month')!.value
+    const D = parts.find(p => p.type === 'day')!.value
+    const day = `${Y}-${M}-${D}`
+    if (!dates.includes(day)) dates.push(day)
+    cur.setUTCHours(cur.getUTCHours() + 12)
   }
 
-  for (const day of Array.from(dates.values())) {
-    const url = new URL(PATH, API_BASE)
-    url.searchParams.set('$filter', `doba eq '${day}'`)
-    const res = await fetch(url.toString(), { headers: { 'Accept': 'application/json' }, next: { revalidate: 300 } })
-    const text = await res.text()
-    if (!res.ok) throw new Error(`PSE RCE HTTP ${res.status} — ${text.slice(0,200)}`)
+  for (const day of dates) {
+    const [y, m, d] = day.split('-').map(Number)
+    // najpierw spróbuj v2 (Date)
+    let resp = await fetchDay('Date', day)
+    if (!resp.ok) {
+      // fallback do v1 (doba)
+      resp = await fetchDay('doba', day)
+      if (!resp.ok) throw new Error(`PSE RCE HTTP ${resp.status} — ${resp.txt.slice(0, 200)}`)
+    }
     let json: any
-    try { json = JSON.parse(text) } catch { throw new Error(`PSE RCE zwrócił nie-JSON: ${text.slice(0,120)}`) }
-    const rows = mapRceValueToRows(json)
-    out.push(...rows)
+    try { json = JSON.parse(resp.txt) } catch { throw new Error(`PSE RCE zwrócił nie-JSON: ${resp.txt.slice(0,160)}`) }
+    out.push(...mapJsonToRows(json, y, m, d))
   }
 
-  // przefiltruj do żądanego przedziału
-  return out
-    .filter(r => {
-      const t = new Date(r.timestamp).getTime()
-      return t >= new Date(fromISO).getTime() && t < new Date(toISO).getTime()
-    })
-    .sort((a,b) => a.timestamp.localeCompare(b.timestamp))
+  // filtr do żądanego zakresu
+  const f = out.filter(r => {
+    const t = +new Date(r.timestamp)
+    return t >= +new Date(fromISO) && t < +new Date(toISO)
+  })
+  return f.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
 }
 
 export default fetchRceHourlyPln
