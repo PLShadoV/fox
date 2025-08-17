@@ -1,156 +1,178 @@
 // lib/providers/rce.ts
-// Pobieranie RCE PLN/kWh z PSE (v2 -> v1 -> fallback $top) i zwrot jako Map<ISO_UTC_godzina, cena>
+// Pobieranie RCE (PLN/kWh) z API PSE z wieloma wariantami filtrów i „przeglądarkowymi” nagłówkami.
+// Zwraca Mapę: klucz = ISO (pełna godzina UTC), wartość = cena PLN/kWh (może być ujemna).
+
+type RceRowRaw = {
+  period_utc?: string
+  rce_pln?: number | string
+  // czasem API potrafi zwrócić tylko udtczas/dtime – zostawiamy tu miejsce na rozwinięcie
+  udtczas?: string
+  dtime?: string
+}
 
 const V2 = 'https://api.raporty.pse.pl/api/rce-pln'
 const V1 = 'https://v1.api.raporty.pse.pl/api/rce-pln'
 
-type RceRow = { period_utc?: string; udtczas?: string; udtczas_oreb?: string; rce_pln?: number }
-type FetchResult = { ok: boolean; url: string; http?: number; rows: RceRow[] }
-
-function clampHourISO(d: Date) {
-  const c = new Date(d); c.setUTCMinutes(0, 0, 0); return c.toISOString()
-}
-
-function toIsoHourLoose(x: any): string | null {
-  if (!x) return null
-  // obsługa "2025-08-17T10:00:00Z", "2025-08-17 10:00", itp.
-  const s = String(x).replace(' ', 'T')
-  const d = new Date(s.endsWith('Z') || s.includes('+') ? s : s + ':00Z')
-  if (isNaN(d.getTime())) {
-    const d2 = new Date(x)
-    if (isNaN(d2.getTime())) return null
-    return clampHourISO(d2)
+/** „Browser-like” nagłówki + profil OData v4. */
+function rceHeaders() {
+  const h: Record<string, string> = {
+    'Accept': 'application/json;odata.metadata=minimal',
+    'OData-Version': '4.0',
+    'Accept-Language': 'pl-PL,pl;q=0.9,en;q=0.8',
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0 Safari/537.36',
+    // część serwerów PSE akceptuje filtry tylko z „prawdziwym” pochodzeniem
+    'Origin': 'https://raporty.pse.pl',
+    'Referer': 'https://raporty.pse.pl/',
+    'X-Requested-With': 'XMLHttpRequest',
   }
-  return clampHourISO(d)
+  return h
 }
 
-async function fetchJson(url: string): Promise<FetchResult> {
-  try {
-    const res = await fetch(url, {
-      headers: { 'accept': 'application/json' },
-      next: { revalidate: 300 },
-    })
-    const http = res.status
-    const text = await res.text()
-    let json: any = null
-    try { json = JSON.parse(text) } catch { /* nie JSON */ }
+/** Przygotuj listę kandydatów URL dla danej doby (v2 i v1) + bulk fallback. */
+function buildCandidateUrls(dayStr: string) {
+  // zakres UTC po godzinach (dla variantu z period_utc)
+  const day = new Date(`${dayStr}T00:00:00Z`)
+  const next = new Date(day.getTime() + 24 * 3600_000)
+  const fromIso = day.toISOString().replace('.000Z', 'Z')
+  const toIso = next.toISOString().replace('.000Z', 'Z')
 
-    // OData zwykle zwraca { value: [...] }
-    const rows: RceRow[] = Array.isArray(json?.value) ? json.value as RceRow[] : (Array.isArray(json) ? json as RceRow[] : [])
-    return { ok: res.ok && Array.isArray(rows), url, http, rows }
-  } catch (e) {
-    return { ok: false, url, http: undefined, rows: [] }
-  }
-}
+  const commonSel = `$select=period_utc,rce_pln&$orderby=period_utc%20asc&$top=500`
+  // Uwaga: kodujemy spacje jako %20 i enkapsulujemy daty pojedynczymi apostrofami
+  const q = (filter: string) => `${commonSel}&$filter=${encodeURIComponent(filter)}`
 
-function buildV2DayUrls(day: string): string[] {
-  const enc = encodeURIComponent
-  const sel = '$select=period_utc,rce_pln'
-  const ord = '$orderby=period_utc asc'
-  const top = '$top=500'
-  const d0 = `${day} 00:00`, d1 = `${day} 23:59`
-  return [
-    // 1) business_date (jeśli to pole ma typ date – część instalacji działa z tym)
-    `${V2}?${sel}&${ord}&${top}&$filter=business_date eq '${day}'`,
-    // 2) doba (spotykane w przykładach)
-    `${V2}?${sel}&${ord}&${top}&$filter=doba eq '${day}'`,
-    // 3) udtczas jako lokalny czas (tak używa wiele integracji HA)
-    `${V2}?${sel}&${ord}&${top}&$filter=udtczas ge '${d0}' and udtczas le '${d1}'`,
-    // 4) zakres po UTC z typem datetimeoffset
-    `${V2}?${sel}&${ord}&${top}&$filter=period_utc ge datetimeoffset'${day}T00:00:00Z' and period_utc le datetimeoffset'${day}T23:59:59Z'`,
+  const v2 = [
+    // business_date – wg maps PDF powinno działać
+    `${V2}?${q(`business_date eq '${dayStr}'`)}`,
+    // alternatywnie „doba”
+    `${V2}?${q(`doba eq '${dayStr}'`)}`,
+    // udtczas (varchar) w PL – najczęściej akceptowane w v2
+    `${V2}?${q(`udtczas ge '${dayStr} 00:00' and udtczas le '${dayStr} 23:59'`)}`,
+    // period_utc (DateTimeOffset) w pełnym ISO (bez wrappera datetimeoffset'...')
+    `${V2}?${q(`period_utc ge ${`datetimeoffset'${fromIso}'`} and period_utc le ${`datetimeoffset'${toIso}'`}`)}`,
   ]
-}
 
-function buildV1DayUrls(day: string): string[] {
-  const sel = '$select=period_utc,rce_pln'
-  const ord = '$orderby=period_utc asc'
-  const top = '$top=500'
-  const d0 = `${day} 00:00`, d1 = `${day} 23:59`
-  return [
-    `${V1}?${sel}&${ord}&${top}&$filter=doba eq '${day}'`,
-    `${V1}?${sel}&${ord}&${top}&$filter=udtczas_oreb ge '${d0}' and udtczas_oreb le '${d1}'`,
-    `${V1}?${sel}&${ord}&${top}&$filter=period_utc ge datetimeoffset'${day}T00:00:00Z' and period_utc le datetimeoffset'${day}T23:59:59Z'`,
+  const v1 = [
+    `${V1}?${q(`doba eq '${dayStr}'`)}`,
+    `${V1}?${q(`udtczas_oreb ge '${dayStr} 00:00' and udtczas_oreb le '${dayStr} 23:59'`)}`,
+    `${V1}?${q(`period_utc ge ${`datetimeoffset'${fromIso}'`} and period_utc le ${`datetimeoffset'${toIso}'`}`)}`,
   ]
-}
 
-/** Fallback bez filtra – bierzemy ostatnie ~2000 rekordów i tniemy lokalnie */
-function buildBulkUrls(): string[] {
-  return [
-    `${V2}?$select=period_utc,rce_pln&$orderby=period_utc desc&$top=2000`,
-    `${V1}?$select=period_utc,rce_pln&$orderby=period_utc desc&$top=2000`,
+  // bulk – gdy filtry nie działają / odrzucane
+  const bulk = [
+    `${V2}?$select=period_utc,rce_pln&$orderby=period_utc%20desc&$top=2000`,
+    `${V1}?$select=period_utc,rce_pln&$orderby=period_utc%20desc&$top=2000`,
   ]
+
+  return { v2, v1, bulk, fromIso, toIso }
 }
 
-function rowsToMap(rows: RceRow[], fromISO: string, toISO: string): Map<string, number> {
-  const fromT = new Date(fromISO).getTime()
-  const toT = new Date(toISO).getTime()
-  const map = new Map<string, number>()
-  for (const r of rows) {
-    const iso = toIsoHourLoose(r.period_utc || r.udtczas || r.udtczas_oreb)
-    if (!iso) continue
-    const t = new Date(iso).getTime()
-    if (t < fromT || t > toT) continue
-    const price = Number(r.rce_pln ?? 0)
-    if (Number.isFinite(price)) map.set(iso, price)
+/** Normalizacja liczby (czasem przychodzi string z przecinkiem). */
+function toNumber(x: any): number {
+  if (x == null) return 0
+  if (typeof x === 'number') return x
+  if (typeof x === 'string') {
+    const s = x.replace(',', '.').trim()
+    const n = Number(s)
+    return isFinite(n) ? n : 0
   }
-  return map
+  const n = Number(x)
+  return isFinite(n) ? n : 0
 }
 
-/** Pobierz ceny RCE dla pojedynczego dnia (YYYY-MM-DD); zwróć surowe rekordy */
-async function fetchDayRaw(day: string): Promise<{ rows: RceRow[]; tried: Array<{ api: 'v2' | 'v1' | 'bulk', url: string, ok: boolean, http?: number, count: number }> }> {
-  const tried: Array<{ api: 'v2' | 'v1' | 'bulk', url: string, ok: boolean, http?: number, count: number }> = []
+/** Wspólny fetch z nagłówkami i delikatnym timeoutem. */
+async function httpGet(url: string, signal?: AbortSignal) {
+  const res = await fetch(url, {
+    headers: rceHeaders(),
+    method: 'GET',
+    // revalidate: pozwalamy edge’owi cache’ować krótko, żeby nie „dusić” API
+    next: { revalidate: 60 },
+    signal,
+  })
+  const text = await res.text()
+  let body: any = null
+  try { body = JSON.parse(text) } catch { body = null }
+  return { ok: res.ok, status: res.status, body, text }
+}
 
-  // v2
-  for (const url of buildV2DayUrls(day)) {
-    const r = await fetchJson(url)
-    tried.push({ api: 'v2', url: r.url, ok: r.ok, http: r.http, count: r.rows.length })
-    if (r.ok && r.rows.length) return { rows: r.rows, tried }
-  }
-  // v1
-  for (const url of buildV1DayUrls(day)) {
-    const r = await fetchJson(url)
-    tried.push({ api: 'v1', url: r.url, ok: r.ok, http: r.http, count: r.rows.length })
-    if (r.ok && r.rows.length) return { rows: r.rows, tried }
-  }
-  // bulk (bez filtra – bierzemy większą paczkę)
-  for (const url of buildBulkUrls()) {
-    const r = await fetchJson(url)
-    tried.push({ api: 'bulk', url: r.url, ok: r.ok, http: r.http, count: r.rows.length })
-    if (r.ok && r.rows.length) {
-      // uwaga: dalej przefiltrujemy po zakresie w mapowaniu
-      return { rows: r.rows, tried }
+/** Wyciągnij tablicę rekordów z odpowiedzi OData (value[] lub korzeń []). */
+function rowsFromBody(body: any): RceRowRaw[] {
+  if (!body) return []
+  if (Array.isArray(body)) return body as RceRowRaw[]
+  if (Array.isArray(body?.value)) return body.value as RceRowRaw[]
+  return []
+}
+
+/** Spreparuj klucz godziny: pełna godzina w UTC (ISO). */
+function hourKeyFromPeriodUtc(period_utc: string): string | null {
+  const d = new Date(period_utc)
+  if (isNaN(d.getTime())) return null
+  d.setUTCMinutes(0, 0, 0)
+  return d.toISOString()
+}
+
+/** Filtrowanie „bulk” do doby dayStr (UTC). */
+function inDay(dayStr: string, isoKey: string) {
+  return isoKey.startsWith(dayStr) // „YYYY-MM-DDT…”
+}
+
+/**
+ * Główna funkcja: mapa { ISO_UTC_godzina -> cena PLN/kWh }.
+ * – jeśli wszystkie filtry zwrócą 400, użyje bulk i lokalnego ucięcia do doby.
+ */
+export async function fetchRcePlnMap(fromISO: string, toISO: string): Promise<Map<string, number>> {
+  // Działamy po DOBACH – /api/data już woła nas po dobie; dla bezpieczeństwa obetnijmy do from..to
+  // i tak scalamy po godzinach w /api/data.
+  const day = new Date(fromISO)
+  const y = day.getUTCFullYear()
+  const m = String(day.getUTCMonth() + 1).padStart(2, '0')
+  const d = String(day.getUTCDate()).padStart(2, '0')
+  const dayStr = `${y}-${m}-${d}`
+
+  const { v2, v1, bulk } = buildCandidateUrls(dayStr)
+
+  // timeout 6 s łącznie na próbę ścieżki (żeby nie blokować całej odpowiedzi)
+  const ac = new AbortController()
+  const t = setTimeout(() => ac.abort(), 6000)
+
+  // spróbuj po kolei: v2 -> v1 -> bulk
+  const order = [...v2, ...v1, ...bulk]
+  let picked: RceRowRaw[] = []
+
+  for (const url of order) {
+    try {
+      const { ok, status, body } = await httpGet(url, ac.signal)
+      if (!ok) continue
+      const rows = rowsFromBody(body)
+      if (rows.length) {
+        // jeśli to „bulk” – przytnij do naszej doby
+        const isBulk = url.includes('$orderby=period_utc%20desc') || url.includes('$top=2000')
+        const arr = isBulk
+          ? rows.filter(r => {
+              const key = r.period_utc ? hourKeyFromPeriodUtc(r.period_utc) : null
+              return key ? inDay(dayStr, key.slice(0, 10)) : false
+            })
+          : rows
+        if (arr.length) {
+          picked = arr
+          break
+        }
+      }
+    } catch {
+      // ignorujemy – lecimy dalej
     }
   }
-  return { rows: [], tried }
-}
 
-/** Publiczne: zwróć Map<ISO_UTC_godzina, cena PLN/kWh> dla zadanego zakresu [fromISO..toISO] */
-export async function fetchRcePlnMap(fromISO: string, toISO: string): Promise<Map<string, number>> {
-  // Dni w PL nie są tu potrzebne – porównujemy po UTC (period_utc)
-  // Zrobimy jednak per-dzień, żeby nie pobierać za dużo
-  const start = new Date(fromISO)
-  const end = new Date(toISO)
-  const out = new Map<string, number>()
+  clearTimeout(t)
 
-  // policz ile dób
-  const days: string[] = []
-  const dt = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()))
-  const endDay = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()))
-  for (let t = dt; t.getTime() <= endDay.getTime(); t.setUTCDate(t.getUTCDate() + 1)) {
-    const y = t.getUTCFullYear()
-    const m = String(t.getUTCMonth() + 1).padStart(2, '0')
-    const d = String(t.getUTCDate()).padStart(2, '0')
-    days.push(`${y}-${m}-${d}`)
+  const map = new Map<string, number>()
+  for (const r of picked) {
+    const key = r.period_utc ? hourKeyFromPeriodUtc(r.period_utc) : null
+    if (!key) continue
+    const price = toNumber(r.rce_pln)
+    map.set(key, price)
   }
 
-  for (const day of days) {
-    const { rows } = await fetchDayRaw(day)
-    if (!rows.length) continue
-    const map = rowsToMap(rows, fromISO, toISO)
-    for (const [k, v] of map) out.set(k, v)
-  }
-  return out
+  // Na końcu: jeśli nic nie złapaliśmy – oddaj pustą mapę (API /api/data ustawi wtedy price=0)
+  return map
 }
-
-/** Debug-helper (używany w /api/rce/debug) */
-export const __rce_internal = { buildV2DayUrls, buildV1DayUrls, buildBulkUrls, fetchDayRaw, rowsToMap, V1, V2 }
