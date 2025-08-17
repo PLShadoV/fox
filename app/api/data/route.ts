@@ -1,178 +1,157 @@
 // app/api/data/route.ts
-import { NextRequest } from 'next/server'
-import { fetchFoxEssHourlyExported } from '@/lib/providers/foxess'
-import { fetchRcePlnMap } from '@/lib/providers/rce'
+import type { NextRequest } from 'next/server';
 
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'
-export const preferredRegion = ['waw1', 'fra1', 'arn1']{
-  "functions": {
-    "app/api/**/route.ts": {
-      "regions": ["waw1", "fra1", "arn1"]
-    }
-  }
-}
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+// (opcjonalnie) preferowane regiony — możesz usunąć, jeśli nie chcesz wymuszać:
+export const preferredRegion = ['waw1', 'fra1', 'arn1'] as const;
 
+const TZ = 'Europe/Warsaw';
 
-type Row = { ts: string; kwh: number; price: number; revenue: number }
-const TZ = 'Europe/Warsaw'
+type HourRow = {
+  timestamp: string;            // ISO (początek godziny w czasie UTC odpowiadający czasu PL)
+  exported_kwh: number;         // z FoxESS
+  rce_pln_per_kwh?: number;     // z RCE (PLN/kWh)
+  revenue_pln?: number;         // exported_kwh * rce_pln_per_kwh
+};
 
-/* ----------------------- CZAS: PL -> UTC (z DST) ----------------------- */
-function offsetMinFor(y: number, m1: number, d: number, h = 0, mi = 0) {
-  const probe = new Date(Date.UTC(y, m1, d, h, mi, 0, 0))
-  const s = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, timeZoneName: 'short' }).format(probe)
-  const m = s.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/)
-  if (!m) return [3,4,5,6,7,8,9].includes(m1) ? 120 : 60
-  const sign = m[1].startsWith('-') ? -1 : 1
-  const hh = Math.abs(parseInt(m[1], 10))
-  const mm = m[2] ? parseInt(m[2], 10) : 0
-  return sign * (hh * 60 + mm)
-}
-function isoPL(y: number, m1: number, d: number, H = 0, M = 0, S = 0, ms = 0) {
-  const off = offsetMinFor(y, m1, d, H, M)
-  const utcMs = Date.UTC(y, m1, d, H, M, S, ms) - off * 60_000
-  return new Date(utcMs).toISOString()
-}
-function dayBoundsPL(dt: Date) {
-  const p = new Intl.DateTimeFormat('en-GB', {
-    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(dt)
-  const get = (t: string) => Number(p.find(x => x.type === t)!.value)
-  const y = get('year'), m = get('month'), d = get('day')
-  return {
-    start: isoPL(y, m - 1, d, 0, 0, 0, 0),
-    end:   isoPL(y, m - 1, d, 23, 59, 59, 999),
-  }
-}
-function parseFlexible(input: string | null | undefined, which: 'start'|'end'): string {
-  if (!input) return ''
-  let s = decodeURIComponent(String(input)).trim()
-  { const d = new Date(s); if (!isNaN(d.getTime())) return d.toISOString() }
-  let m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2}))?$/)
-  if (m) {
-    const D = +m[1], M = +m[2], Y = +m[3]
-    const H = m[4] ? +m[4] : (which === 'start' ? 0 : 23)
-    const Min = m[5] ? +m[5] : (which === 'start' ? 0 : 59)
-    return isoPL(Y, M - 1, D, H, Min, which === 'start' ? 0 : 59, which === 'start' ? 0 : 999)
-  }
-  m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/)
-  if (m) {
-    const Y = +m[1], M = +m[2], D = +m[3]
-    const H = m[4] ? +m[4] : (which === 'start' ? 0 : 23)
-    const Min = m[5] ? +m[5] : (which === 'start' ? 0 : 59)
-    return isoPL(Y, M - 1, D, H, Min, which === 'start' ? 0 : 59, which === 'start' ? 0 : 999)
-  }
-  return ''
-}
-function enumerateMidnightsPL(fromISO: string, toISO: string) {
-  const start = new Date(fromISO)
-  const end = new Date(toISO)
-  const s = dayBoundsPL(start).start
-  const e = dayBoundsPL(end).start
-  const out: string[] = []
-  for (let t = new Date(s).getTime(); t <= new Date(e).getTime(); t += 24 * 3600_000) {
-    out.push(new Date(t).toISOString())
-  }
-  return out
-}
-function clampToHourUTC(d: Date) {
-  const c = new Date(d); c.setUTCMinutes(0,0,0); return c
+function isoForWarsawHour(y: number, m1: number, d: number, h: number) {
+  // tworzymy chwilę "y-m-d h:00" w strefie PL jako moment UTC
+  const seed = new Date(Date.UTC(y, m1, d, h));
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(seed);
+  const Y = Number(parts.find((p) => p.type === 'year')!.value);
+  const M = Number(parts.find((p) => p.type === 'month')!.value);
+  const D = Number(parts.find((p) => p.type === 'day')!.value);
+  const H = Number(parts.find((p) => p.type === 'hour')!.value);
+  const warsawAsUTC = new Date(Date.UTC(Y, M - 1, D, H, 0, 0));
+  return warsawAsUTC.toISOString();
 }
 
-/* --------------------------- CACHE: 30 s --------------------------- */
-type CacheEntry = { ts: number; rows: Row[]; stats?: any }
-const DATA_TTL_MS = 30_000
-const g = globalThis as any
-g.__data_cache ||= new Map<string, CacheEntry>()
+function parseRange(req: NextRequest): { fromISO: string; toISO: string } {
+  const { searchParams } = new URL(req.url);
+  const fromQ = searchParams.get('from');
+  const toQ = searchParams.get('to');
 
-/* ------------------------------- ROUTE ------------------------------- */
+  if (fromQ && toQ) return { fromISO: new Date(fromQ).toISOString(), toISO: new Date(toQ).toISOString() };
+
+  // domyślnie: wczorajsza doba w czasie PL
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+
+  let Y = Number(parts.find((p) => p.type === 'year')!.value);
+  let M = Number(parts.find((p) => p.type === 'month')!.value);
+  let D = Number(parts.find((p) => p.type === 'day')!.value);
+  // cofamy jeden dzień w kalendarzu PL:
+  const dLocal = new Date(Date.UTC(Y, M - 1, D, 12)); // południe, żeby bezpiecznie odjąć 1 dzień
+  dLocal.setUTCDate(dLocal.getUTCDate() - 1);
+  Y = dLocal.getUTCFullYear();
+  M = dLocal.getUTCMonth() + 1;
+  D = dLocal.getUTCDate();
+
+  const fromISO = isoForWarsawHour(Y, M - 1, D, 0);
+  // toISO = początek następnego dnia (PL)
+  const toISO = isoForWarsawHour(Y, M - 1, D + 1, 0);
+  return { fromISO, toISO };
+}
+
 export async function GET(req: NextRequest) {
+  const { fromISO, toISO } = parseRange(req);
+
+  const errors: Record<string, string> = {};
+  let foxess: Array<{ timestamp: string; exported_kwh: number }> = [];
+  let rce: Array<{ timestamp: string; price_pln_mwh?: number; pln_per_kwh?: number }> = [];
+
+  // FOXESS
   try {
-    const { searchParams } = new URL(req.url)
-    const wantDebug = searchParams.get('debug') === '1'
+    const mod = await import('@/lib/providers/foxess');
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const { fetchFoxEssHourlyExported } = mod as any;
+    foxess = await fetchFoxEssHourlyExported(fromISO, toISO);
+  } catch (e: any) {
+    errors.foxess = e?.message || String(e);
+  }
 
-    const now = new Date()
-    const def = dayBoundsPL(now)
-    let from = parseFlexible(searchParams.get('from'), 'start') || def.start
-    let to   = parseFlexible(searchParams.get('to'),   'end')   || def.end
-
-    // sanity: jeśli użytkownik podał odwrócone granice – zamiana
-    if (new Date(from).getTime() > new Date(to).getTime()) {
-      [from, to] = [to, from]
-    }
-
-    const key = `${from}|${to}`
-    const cached = g.__data_cache.get(key)
-    if (cached && Date.now() - cached.ts < DATA_TTL_MS) {
-      return new Response(JSON.stringify({ ok: true, rows: cached.rows, ...(wantDebug ? { stats: cached.stats } : {}) }, null, 2), {
-        headers: {
-          'content-type': 'application/json',
-          'cache-control': 's-maxage=30, stale-while-revalidate=15',
-        },
-      })
-    }
-
-    // 1) ENERGIA z FoxESS – iteracja po dobach PL
-    const dayStarts = enumerateMidnightsPL(from, to)
-    let energy: { ts: string; kwh: number }[] = []
-    for (const dayStart of dayStarts) {
-      const endOfDay = new Date(new Date(dayStart).getTime() + 24 * 3600_000 - 1).toISOString()
-      try {
-        const points = await fetchFoxEssHourlyExported(dayStart, endOfDay)
-        energy.push(...points.map(p => ({ ts: p.timestamp, kwh: Number(p.exported_kwh || 0) })))
-      } catch {
-        // pojedyncza doba padła – pomijamy
+  // RCE (opcjonalnie – jeśli nie masz providera, zignorujemy błąd)
+  try {
+    // @ts-ignore – provider może nie istnieć w niektórych wdrożeniach
+    const rceMod = await import('@/lib/providers/rce').catch(() => null as any);
+    if (rceMod) {
+      const fn =
+        rceMod.fetchRceHourlyPln ||
+        rceMod.fetchRCEHourlyPLN ||
+        rceMod.fetchRCE ||
+        rceMod.default;
+      if (typeof fn === 'function') {
+        rce = await fn(fromISO, toISO);
       }
     }
-    // utnij do zakresu i zbij do pełnych godzin UTC
-    energy = energy.filter(e => {
-      const t = new Date(e.ts).getTime()
-      return t >= new Date(from).getTime() && t <= new Date(to).getTime()
-    })
-    const energyMap: Record<string, number> = {}
-    for (const e of energy) {
-      const k = clampToHourUTC(new Date(e.ts)).toISOString()
-      energyMap[k] = (energyMap[k] || 0) + e.kwh
-    }
-
-    // 2) CENY RCE (Map<ISO_UTC -> PLN/kWh>)
-    const rceMap = await fetchRcePlnMap(from, to)
-
-    // 3) Siatka godzin od from..to (co 1h), merge + revenue=max(price,0)
-    const start = clampToHourUTC(new Date(from))
-    const end   = clampToHourUTC(new Date(to))
-    const rows: Row[] = []
-    for (let t = new Date(start); t <= end; t.setUTCHours(t.getUTCHours() + 1)) {
-      const keyHour = t.toISOString()
-      const kwh = Number(energyMap[keyHour] || 0)
-      const price = Number(rceMap.get(keyHour) ?? 0)  // może być < 0 (wyświetlamy)
-      const eff   = price < 0 ? 0 : price             // ujemne w przychodzie jako 0
-      rows.push({ ts: keyHour, kwh, price, revenue: +(kwh * eff).toFixed(6) })
-    }
-
-    // 4) Statystyki (sumy pod tabelę)
-    const sumKwh = rows.reduce((s, r) => s + r.kwh, 0)
-    const sumRevenue = rows.reduce((s, r) => s + r.revenue, 0)
-    const stats = wantDebug ? {
-      hoursEnergy: rows.reduce((s, r) => s + (r.kwh > 0 ? 1 : 0), 0),
-      rceHits: rows.reduce((s, r) => s + (r.price !== 0 ? 1 : 0), 0),
-      firstHour: rows[0]?.ts,
-      lastHour: rows[rows.length - 1]?.ts,
-      sumKwh,
-      sumRevenue
-    } : undefined
-
-    g.__data_cache.set(key, { ts: Date.now(), rows, stats })
-    return new Response(JSON.stringify({ ok: true, rows, ...(wantDebug ? { stats } : {}) }, null, 2), {
-      headers: {
-        'content-type': 'application/json',
-        'cache-control': 's-maxage=30, stale-while-revalidate=15',
-      },
-    })
   } catch (e: any) {
-    return new Response(JSON.stringify({ ok: false, error: e?.message || 'data error' }, null, 2), {
-      status: 500,
-      headers: { 'content-type': 'application/json' },
-    })
+    errors.rce = e?.message || String(e);
   }
+
+  // Zbijamy do mapy po timestamp
+  const map = new Map<string, HourRow>();
+  for (const p of foxess) {
+    map.set(p.timestamp, { timestamp: p.timestamp, exported_kwh: Number(p.exported_kwh) || 0 });
+  }
+  for (const p of rce) {
+    const ts = p.timestamp;
+    const row = map.get(ts) || { timestamp: ts, exported_kwh: 0 };
+    const plnPerKwh =
+      typeof p.pln_per_kwh === 'number'
+        ? p.pln_per_kwh
+        : typeof p.price_pln_mwh === 'number'
+        ? p.price_pln_mwh / 1000
+        : undefined;
+    if (typeof plnPerKwh === 'number') {
+      row.rce_pln_per_kwh = plnPerKwh;
+      row.revenue_pln = Number((row.exported_kwh * plnPerKwh).toFixed(6));
+    }
+    map.set(ts, row);
+  }
+
+  // Posortowana tabela godzinowa
+  const hourly = Array.from(map.values()).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+  // Sumarne
+  const totals = hourly.reduce(
+    (acc, r) => {
+      acc.exported_kwh += r.exported_kwh || 0;
+      acc.revenue_pln += r.revenue_pln || 0;
+      return acc;
+    },
+    { exported_kwh: 0, revenue_pln: 0 }
+  );
+
+  return new Response(
+    JSON.stringify(
+      {
+        ok: true,
+        range: { fromISO, toISO },
+        hourly,
+        totals: {
+          exported_kwh: Number(totals.exported_kwh.toFixed(6)),
+          revenue_pln: Number(totals.revenue_pln.toFixed(6)),
+        },
+        errors: Object.keys(errors).length ? errors : undefined,
+      },
+      null,
+      2
+    ),
+    { headers: { 'content-type': 'application/json' } }
+  );
 }
