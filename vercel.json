@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "app/api/**/route.ts": {
+      "regions": ["waw1", "fra1", "arn1"]
+    }
+  }
+}

@@ -5,6 +5,14 @@ import { fetchRcePlnMap } from '@/lib/providers/rce'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const preferredRegion = ['waw1', 'fra1', 'arn1']{
+  "functions": {
+    "app/api/**/route.ts": {
+      "regions": ["waw1", "fra1", "arn1"]
+    }
+  }
+}
+
 
 type Row = { ts: string; kwh: number; price: number; revenue: number }
 const TZ = 'Europe/Warsaw'
