@@ -6,8 +6,15 @@ export const dynamic = 'force-dynamic'
 export const preferredRegion: string[] = ['waw1', 'fra1', 'arn1']
 
 const TZ = 'Europe/Warsaw'
+const FOX_TIMEOUT_MS = 7000
+const RCE_TIMEOUT_MS = 7000
 
-type HourRow = { timestamp: string; exported_kwh: number; rce_pln_per_kwh?: number; revenue_pln?: number }
+type HourRow = {
+  timestamp: string
+  exported_kwh: number
+  rce_pln_per_kwh?: number
+  revenue_pln?: number
+}
 
 function isoForWarsawHour(y: number, m1: number, d: number, h: number) {
   const seed = new Date(Date.UTC(y, m1, d, h))
@@ -43,30 +50,53 @@ function parseRange(req: NextRequest): { fromISO: string; toISO: string; dateUse
   return { fromISO: isoForWarsawHour(Y, M-1, D, 0), toISO: isoForWarsawHour(Y, M-1, D+1, 0), dateUsed: dayStr }
 }
 
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms)
+    p.then(v => { clearTimeout(t); resolve(v) }, e => { clearTimeout(t); reject(e) })
+  })
+}
+
 export async function GET(req: NextRequest) {
   const { fromISO, toISO, dateUsed } = parseRange(req)
-
   const errors: Record<string,string> = {}
+
+  // równolegle; każdy z twardym timeoutem
+  const foxPromise = (async () => {
+    const { fetchFoxEssHourlyExported } = await import('@/lib/providers/foxess')
+    return fetchFoxEssHourlyExported(fromISO, toISO) as Promise<Array<{ timestamp: string; exported_kwh: number }>>
+  })()
+
+  const rcePromise = (async () => {
+    try {
+      const { fetchRceHourlyPln } = await import('@/lib/providers/rce')
+      return fetchRceHourlyPln(fromISO, toISO) as Promise<Array<{ timestamp: string; pln_per_kwh: number }>>
+    } catch {
+      // jeśli nie masz jeszcze providera RCE – zwróć puste
+      return [] as Array<{ timestamp: string; pln_per_kwh: number }>
+    }
+  })()
+
+  const [foxRes, rceRes] = await Promise.allSettled([
+    withTimeout(foxPromise, FOX_TIMEOUT_MS, 'FoxESS'),
+    withTimeout(rcePromise, RCE_TIMEOUT_MS, 'RCE'),
+  ])
+
   let fox: Array<{ timestamp: string; exported_kwh: number }> = []
   let rce: Array<{ timestamp: string; pln_per_kwh: number }> = []
 
-  // FOXESS
-  try {
-    const { fetchFoxEssHourlyExported } = await import('@/lib/providers/foxess')
-    fox = await fetchFoxEssHourlyExported(fromISO, toISO)
-  } catch (e: any) {
-    errors.foxess = e?.message || String(e)
+  if (foxRes.status === 'fulfilled') {
+    fox = foxRes.value || []
+  } else {
+    errors.foxess = foxRes.reason?.message || String(foxRes.reason)
+  }
+  if (rceRes.status === 'fulfilled') {
+    rce = rceRes.value || []
+  } else {
+    errors.rce = rceRes.reason?.message || String(rceRes.reason)
   }
 
-  // RCE
-  try {
-    const { fetchRceHourlyPln } = await import('@/lib/providers/rce')
-    rce = await fetchRceHourlyPln(fromISO, toISO)
-  } catch (e: any) {
-    errors.rce = e?.message || String(e)
-  }
-
-  // Merge
+  // merge
   const map = new Map<string, HourRow>()
   for (const p of fox) map.set(p.timestamp, { timestamp: p.timestamp, exported_kwh: Number(p.exported_kwh) || 0 })
   for (const p of rce) {
@@ -75,6 +105,7 @@ export async function GET(req: NextRequest) {
     row.revenue_pln = Number(((row.exported_kwh || 0) * (row.rce_pln_per_kwh || 0)).toFixed(6))
     map.set(p.timestamp, row)
   }
+
   const hourly = Array.from(map.values()).sort((a,b) => a.timestamp.localeCompare(b.timestamp))
   const totals = hourly.reduce((acc, r) => {
     acc.exported_kwh += r.exported_kwh || 0
@@ -92,5 +123,10 @@ export async function GET(req: NextRequest) {
       revenue_pln: Number(totals.revenue_pln.toFixed(6)),
     },
     errors: Object.keys(errors).length ? errors : undefined
-  }, null, 2), { headers: { 'content-type': 'application/json' }})
+  }, null, 2), {
+    headers: {
+      'content-type': 'application/json',
+      'cache-control': 'no-store'
+    }
+  })
 }
