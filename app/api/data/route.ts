@@ -73,7 +73,7 @@ function clampToHourUTC(d: Date) {
 
 /* --------------------------- CACHE: 30 s --------------------------- */
 type CacheEntry = { ts: number; rows: Row[]; stats?: any }
-const DATA_TTL_MS = 30_000 // ⬅️ odświeżanie co 30 s
+const DATA_TTL_MS = 30_000
 const g = globalThis as any
 g.__data_cache ||= new Map<string, CacheEntry>()
 
@@ -85,16 +85,12 @@ export async function GET(req: NextRequest) {
 
     const now = new Date()
     const def = dayBoundsPL(now)
-    const from = parseFlexible(searchParams.get('from'), 'start') || def.start
-    const to   = parseFlexible(searchParams.get('to'),   'end')   || def.end
+    let from = parseFlexible(searchParams.get('from'), 'start') || def.start
+    let to   = parseFlexible(searchParams.get('to'),   'end')   || def.end
 
     // sanity: jeśli użytkownik podał odwrócone granice – zamiana
     if (new Date(from).getTime() > new Date(to).getTime()) {
-      const tmp = from
-      // @ts-expect-error reassign
-      from = to
-      // @ts-expect-error reassign
-      to = tmp
+      [from, to] = [to, from]
     }
 
     const key = `${from}|${to}`
@@ -108,7 +104,7 @@ export async function GET(req: NextRequest) {
       })
     }
 
-    // 1) ENERGIA z FoxESS – iteracja po dobach PL (redukuje dryf TZ/DST)
+    // 1) ENERGIA z FoxESS – iteracja po dobach PL
     const dayStarts = enumerateMidnightsPL(from, to)
     let energy: { ts: string; kwh: number }[] = []
     for (const dayStart of dayStarts) {
@@ -117,7 +113,7 @@ export async function GET(req: NextRequest) {
         const points = await fetchFoxEssHourlyExported(dayStart, endOfDay)
         energy.push(...points.map(p => ({ ts: p.timestamp, kwh: Number(p.exported_kwh || 0) })))
       } catch {
-        // pojedyncza doba padła – pomijamy, siatka godzin i tak będzie zapełniona zerami
+        // pojedyncza doba padła – pomijamy
       }
     }
     // utnij do zakresu i zbij do pełnych godzin UTC
@@ -131,7 +127,7 @@ export async function GET(req: NextRequest) {
       energyMap[k] = (energyMap[k] || 0) + e.kwh
     }
 
-    // 2) CENY RCE (Map<ISO_UTC -> PLN/kWh>) – odporny provider z fallbackami
+    // 2) CENY RCE (Map<ISO_UTC -> PLN/kWh>)
     const rceMap = await fetchRcePlnMap(from, to)
 
     // 3) Siatka godzin od from..to (co 1h), merge + revenue=max(price,0)
@@ -141,12 +137,12 @@ export async function GET(req: NextRequest) {
     for (let t = new Date(start); t <= end; t.setUTCHours(t.getUTCHours() + 1)) {
       const keyHour = t.toISOString()
       const kwh = Number(energyMap[keyHour] || 0)
-      const price = Number(rceMap.get(keyHour) ?? 0)  // może być < 0 (wyświetlamy), ale…
-      const eff   = price < 0 ? 0 : price             // …w revenue traktujemy ujemne jako 0
+      const price = Number(rceMap.get(keyHour) ?? 0)  // może być < 0 (wyświetlamy)
+      const eff   = price < 0 ? 0 : price             // ujemne w przychodzie jako 0
       rows.push({ ts: keyHour, kwh, price, revenue: +(kwh * eff).toFixed(6) })
     }
 
-    // 4) Statystyki (pomocne do sum w tabeli)
+    // 4) Statystyki (sumy pod tabelę)
     const sumKwh = rows.reduce((s, r) => s + r.kwh, 0)
     const sumRevenue = rows.reduce((s, r) => s + r.revenue, 0)
     const stats = wantDebug ? {
