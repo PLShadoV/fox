@@ -1,49 +1,39 @@
-# FoxESS × RCE — Revenue Dashboard (final)
+# Patch: szybki kalkulator + motywy (dark default)
 
-## Start lokalnie
-```bash
-npm i
-cp .env.example .env.local
-npm run dev
-# http://localhost:3000
-```
+**Co w paczce**
+- `app/api/range/compute/route.ts` – kompletny endpoint liczący sumy GENERATION i przychodu (RCE / RCEm) z timeoutami i walidacją dat.
+- `components/ThemeToggle.tsx` – działający przełącznik jasny/ciemny (domyślnie ciemny).
+- `app/globals.css` – zmienne i klasy (`.pv-card`, `.pv-chip`, `.pv-table`) z poprawionym kontrastem.
 
-## Konfiguracja FoxESS (wybierz tryb)
-- JSON (masz endpoint zwracający [{timestamp, exported_kwh}]):
-```
-FOXESS_MODE=json
-FOXESS_JSON_URL=https://twoj-api.example.com/energy/hourly?sn=TWÓJ_SN
-FOXESS_DEVICE_SN=TWÓJ_SN
-```
-- CLOUD (bezpośrednio do Twojego API z tokenem, server-side):
-```
-FOXESS_MODE=cloud
-FOXESS_API_BASE=https://twoj-api.example.com
-FOXESS_API_TOKEN=sekretny_token
-FOXESS_DEVICE_SN=TWÓJ_SN
-FOXESS_API_PATH=/energy/hourly
-FOXESS_API_METHOD=GET
-```
-- PROXY (opcjonalny worker):
-```
-FOXESS_MODE=proxy
-FOXESS_PROXY_URL=https://twoj-worker.workers.dev
-FOXESS_DEVICE_SN=TWÓJ_SN
-```
-- MOCK (do podglądu UI):
-```
-FOXESS_MODE=mock
-```
+## Instalacja
+1. Skopiuj katalogi z paczki do swojego projektu, zachowując strukturę:
+   - `app/api/range/compute/route.ts`
+   - `components/ThemeToggle.tsx`
+   - `app/globals.css` (jeśli masz własny, dodaj **blok :root** i **klasy .pv-*** na koniec swojego pliku)
+2. Użyj `ThemeToggle` w nagłówku (musi być **client component**):
+   ```tsx
+   import ThemeToggle from "@/components/ThemeToggle";
 
-## RCE (PSE)
-Backend `/api/rce/pse` pobiera dzienny CSV z raporty.pse.pl i zwraca JSON `{timestamp, price_pln_per_kwh}`.
+   export default function HeaderBar(){
+     return (
+       <div className="flex gap-3 items-center">
+         <a className="pv-chip" href="https://www.foxesscloud.com" target="_blank">FoxESS</a>
+         <a className="pv-chip" href="https://raporty.pse.pl/report/rce-pln" target="_blank">RCE (PSE)</a>
+         <ThemeToggle />
+       </div>
+     );
+   }
+   ```
+3. W kalkulatorze wysyłaj zapytanie tak (obsługuje `YYYY-MM-DD` oraz `DD.MM.YYYY`):
+   ```ts
+   const from = new Date(fromDate).toISOString().slice(0,10);
+   const to   = new Date(toDate).toISOString().slice(0,10);
+   const url  = `/api/range/compute?from=${from}&to=${to}&mode=${mode}`; // mode: rce | rcem
+   const res  = await fetch(url).then(r=>r.json());
+   ```
 
-## Deploy na Vercel
-Ustaw w **Environment Variables** (Production/Preview):
-- `NEXT_PUBLIC_BASE_URL=https://twoja-domena-vercel.app`
-- `FOXESS_MODE` i wymagane zmienne wg wybranego trybu
-- `FOXESS_DEVICE_SN`
-
-## Użycie
-W aplikacji wybierz **Szybkie zakresy** (np. Wczoraj) → **Odśwież**.
-Zobaczysz sumy, wykresy (przychód i kWh) oraz tabelę godzinową.
+## Notatki
+- Endpoint ogranicza zakres do ~92 dni, żeby nie blokować serwera. Podnieś wartość w `MAX_DAYS`, jeśli koniecznie trzeba.
+- RCEm: najpierw próbuje `/api/rcem?month=YYYY-MM` (jeśli masz), w przeciwnym razie bierze średnią z godzinowych RCE.
+- Ujemne ceny w RCE są widoczne w tabeli, ale **nie są liczone** do przychodu (zgodnie z prośbą).
+- Motyw **domyślnie ciemny** – zapisywany w `localStorage("pv-theme")`.

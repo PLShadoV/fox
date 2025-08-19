@@ -1,101 +1,19 @@
-// app/api/foxess/debug/route.ts
-import type { NextRequest } from 'next/server'
-import crypto from 'crypto'
+import { NextRequest, NextResponse } from "next/server";
 
-export const runtime = 'nodejs'
-export const dynamic = 'force-dynamic'
+const PSE_API_BASE = process.env.PSE_API_BASE || "https://api.raporty.pse.pl/api";
 
-// UŻYWAMY LITERALNEGO \r\n W PODPISIE
-function signatureHeaders(path: string, tokenRaw: string) {
-  const token = (tokenRaw || '').trim()
-  const timestamp = Date.now().toString()
-  const JOIN = '\\r\\n' // literalne \r\n
-  const toSign = `${path}${JOIN}${token}${JOIN}${timestamp}`
-  const signature = crypto.createHash('md5').update(toSign, 'utf8').digest('hex')
-  return {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-    'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
-    lang: 'en',
-    token,
-    timestamp,
-    signature,
-  } as Record<string, string>
-}
-
-async function callGet(url: URL, pathForSignature: string, token: string) {
-  const headers = signatureHeaders(pathForSignature, token)
-  const res = await fetch(url.toString(), { headers, method: 'GET' })
-  const text = await res.text()
-  const ct = res.headers.get('content-type') || ''
-  let body: any
-  try { body = JSON.parse(text) } catch { body = text.slice(0, 400) }
-  return {
-    status: res.status,
-    ct,
-    errno: typeof body?.errno === 'number' ? body.errno : undefined,
-    msg: body?.msg,
-    preview: typeof body === 'string' ? body : JSON.stringify(body).slice(0, 200),
+export async function GET(req: NextRequest){
+  try {
+    const urlIn = new URL(req.url);
+    const date = urlIn.searchParams.get("date") || new Date().toISOString().slice(0,10);
+    const url = new URL(PSE_API_BASE + "/rce-pln");
+    url.searchParams.set("$filter", `business_date eq '${date}'`);
+    url.searchParams.set("$orderby", "dtime asc");
+    url.searchParams.set("$top", "100");
+    const res = await fetch(url.toString(), { cache: "no-store" });
+    const text = await res.text();
+    return new NextResponse(text, { status: 200, headers: { "content-type": res.headers.get("content-type") || "application/json" } });
+  } catch (e:any) {
+    return NextResponse.json({ ok:false, error: e.message }, { status: 200 });
   }
-}
-
-async function callPost(url: URL, pathForSignature: string, token: string, json: any) {
-  const headers = signatureHeaders(pathForSignature, token)
-  const res = await fetch(url.toString(), { headers, method: 'POST', body: JSON.stringify(json) })
-  const text = await res.text()
-  const ct = res.headers.get('content-type') || ''
-  let body: any
-  try { body = JSON.parse(text) } catch { body = text.slice(0, 400) }
-  return {
-    status: res.status,
-    ct,
-    errno: typeof body?.errno === 'number' ? body.errno : undefined,
-    msg: body?.msg,
-    preview: typeof body === 'string' ? body : JSON.stringify(body).slice(0, 200),
-  }
-}
-
-export async function GET(_req: NextRequest) {
-  const base = (process.env.FOXESS_API_BASE || 'https://www.foxesscloud.com').trim()
-  const token = (process.env.FOXESS_API_TOKEN || '').trim()
-  const sn = (process.env.FOXESS_DEVICE_SN || '').trim()
-
-  const detailPath = '/op/v0/device/detail'
-  const reportPath = '/op/v0/device/report/query'
-
-  // GET /device/detail?sn=... (podpis na samym PATH, bez query)
-  const detailUrl = new URL(detailPath, base)
-  if (sn) detailUrl.searchParams.set('sn', sn)
-
-  // POST /device/report/query (body jak w docs; podpis na PATH)
-  const reportUrl = new URL(reportPath, base)
-  const today = new Date()
-  const body = {
-    sn,
-    year: today.getUTCFullYear(),
-    month: today.getUTCMonth() + 1,
-    day: today.getUTCDate(),
-    dimension: 'day',
-    variables: ['feedin'],
-  }
-
-  const detail = await callGet(detailUrl, detailPath, token)
-  const report = await callPost(reportUrl, reportPath, token, body)
-
-  const maskedToken = token ? `${token.slice(0, 4)}...${token.slice(-4)} (${token.length} chars)` : ''
-
-  return new Response(
-    JSON.stringify(
-      {
-        env: { base, hasToken: !!token, sn },
-        tokenPreview: maskedToken,
-        detail,
-        report,
-      },
-      null,
-      2
-    ),
-    { headers: { 'content-type': 'application/json' } }
-  )
 }

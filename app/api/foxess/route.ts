@@ -1,9 +1,15 @@
-import { NextRequest } from 'next/server'
-import { fetchFoxEssHourlyExported } from '@/lib/providers/foxess'
+import { NextRequest, NextResponse } from "next/server";
+import { getDayExportAndGenerationKWh } from "@/lib/foxess-history-robust";
+
 export async function GET(req: NextRequest){
-  const { searchParams } = new URL(req.url)
-  const from = searchParams.get('from'); const to = searchParams.get('to')
-  if(!from||!to) return new Response('Missing from/to', { status: 400 })
-  try { const data = await fetchFoxEssHourlyExported(from, to); return Response.json(data) }
-  catch(e:any){ return new Response(e.message ?? 'FoxESS error', { status: 500 }) }
+  try {
+    const sn = process.env.FOXESS_INVERTER_SN || "";
+    if (!sn) return NextResponse.json({ ok:false, error:"Brak FOXESS_INVERTER_SN" });
+    const url = new URL(req.url);
+    const date = url.searchParams.get("date") || new Date().toISOString().slice(0,10);
+    const { export: exp, generation: gen } = await getDayExportAndGenerationKWh(sn, date);
+    return NextResponse.json({ ok:true, date, exportKWh: exp.values, generationKWh: gen.values });
+  } catch (e:any) {
+    return NextResponse.json({ ok:false, error: e.message }, { status: 200 });
+  }
 }
